@@ -1,19 +1,21 @@
 """Turn a ScanResult into what people read: the Excel workbook, the
-diagnostics JSON beside it, the summary lines, and the rows the GUI table
-shows. Console-free.
+diagnostics JSON beside it, the summary lines, the rows the GUI table shows,
+and — on request — the diagnostics BUNDLE for the maintainer. Console-free.
 
 The workbook is the deliverable (Projects / Layers / Versions / Scan sheets).
-The diagnostics file records what the reader SAW inside every file — archive
-members, CIM types, every connection string with its JSON path — so a run on
-a real project library is enough to refine the parser without the projects
-themselves ever leaving the PC. Passwords are removed before anything is
-written.
+The diagnostics file records what the reader SAW inside every file (archive
+members, CIM types, every connection string with its JSON path). The bundle
+adds every document itself, secrets removed, plus the workbook and the app
+log — one zip that is enough to teach the reader a real project library's
+layout without the projects ever leaving the PC.
 """
 import json
 import logging
+import re
+import zipfile
 from pathlib import Path
 
-from paths import new_run_dir
+from paths import LOG_DIR, new_run_dir
 from version import APP_NAME, __version__
 
 log = logging.getLogger("tsmis.scan")
@@ -21,13 +23,15 @@ log = logging.getLogger("tsmis.scan")
 WORKBOOK_NAME = "branch_versions.xlsx"
 DIAGNOSTICS_NAME = "diagnostics.json"
 
-PROJECT_COLUMNS = ("Project", "Folder", "Status", "Versions", "Services", "Layers with data",
-                   "Maps", "Type", "Cloud-only", "Size (KB)", "Modified", "Note")
-LAYER_COLUMNS = ("Project", "Map", "Layer", "Layer type", "Connection type", "Version",
-                 "Version GUID", "Service / workspace", "Dataset",
-                 "Connection string (passwords removed)", "Found in")
-VERSION_COLUMNS = ("Version", "Projects", "Layers", "Project files")
+PROJECT_COLUMNS = ("Project", "Location", "Status", "Environments", "Versions", "Service folders",
+                   "Services", "Layers with data", "Maps", "Type", "Cloud-only", "Size (KB)",
+                   "Modified", "Note")
+LAYER_COLUMNS = ("Project", "Map", "Layer", "Layer type", "Connection type", "Environment", "Host",
+                 "Service folder", "Service", "Version", "Version GUID", "Service / workspace",
+                 "Dataset", "Connection string (passwords removed)", "Found in")
+VERSION_COLUMNS = ("Environment", "Version", "Projects", "Layers", "Project files")
 _MAX_COL_WIDTH = 70
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]+")
 
 
 def save(result, out_dir=None):
@@ -43,17 +47,21 @@ def save(result, out_dir=None):
     return workbook, diagnostics
 
 
+def _sorted_projects(result):
+    return sorted(result.projects, key=lambda p: (str(p.path.parent).lower(), p.path.name.lower()))
+
+
 def project_row(p):
-    return (p.path.name, str(p.path.parent), p.status_text, " | ".join(p.versions()),
-            " | ".join(p.sources()), sum(1 for c in p.connections if c.source or c.version),
-            ", ".join(p.maps), p.kind, "yes" if p.cloud_only else "",
-            round(p.size / 1024, 1), p.modified, p.message)
+    return (p.path.name, str(p.path.parent), p.status_text, " | ".join(p.environments()),
+            " | ".join(p.versions()), " | ".join(p.service_folders()), " | ".join(p.sources()),
+            sum(1 for c in p.connections if c.source or c.version), ", ".join(p.maps), p.kind,
+            "yes" if p.cloud_only else "", round(p.size / 1024, 1), p.modified, p.message)
 
 
 def layer_rows(p):
     for c in p.connections:
-        yield (p.path.name, c.map, c.layer, c.layer_type, c.connection_type, c.version,
-               c.version_guid, c.source, c.dataset, c.connection,
+        yield (p.path.name, c.map, c.layer, c.layer_type, c.connection_type, c.environment, c.host,
+               c.folder, c.service, c.version, c.version_guid, c.source, c.dataset, c.connection,
                f"{c.member} · {c.json_path}")
 
 
@@ -85,13 +93,13 @@ def write_workbook(result, path):
         ws.auto_filter.ref = ws.dimensions
         return ws
 
-    projects = sorted(result.projects, key=lambda p: (str(p.path.parent).lower(), p.path.name.lower()))
+    projects = _sorted_projects(result)
     sheet("Projects", PROJECT_COLUMNS, (project_row(p) for p in projects), first=True)
     sheet("Layers", LAYER_COLUMNS, (r for p in projects for r in layer_rows(p)))
     tally = result.version_tally()
     sheet("Versions", VERSION_COLUMNS,
-          ((v, len(t["projects"]), t["layers"], ", ".join(t["projects"]))
-           for v, t in sorted(tally.items(), key=lambda kv: -len(kv[1]["projects"]))))
+          ((env, ver, len(t["projects"]), t["layers"], ", ".join(t["projects"]))
+           for (env, ver), t in sorted(tally.items(), key=lambda kv: (-len(kv[1]["projects"]), kv[0]))))
     sheet("Scan", ("Item", "Value"), scan_facts(result))
     wb.save(str(path))
 
@@ -117,23 +125,52 @@ def scan_facts(result):
     ]
 
 
-def write_diagnostics(result, path):
-    payload = {
+def diagnostics_payload(result):
+    return {
         "app": f"{APP_NAME} v{__version__}",
         "scan": {k: str(v) for k, v in scan_facts(result)},
         "files": [{
             "path": str(p.path), "kind": p.kind, "status": p.status, "message": p.message,
             "size": p.size, "cloud_only": p.cloud_only, "seconds": round(p.seconds, 3),
             "maps": p.maps, "members": p.members, "types_seen": p.types_seen,
+            "documents_kept": [m for m, _t in p.documents],
             "connections": [{
                 "map": c.map, "layer": c.layer, "layer_type": c.layer_type,
                 "factory": c.factory, "version": c.version, "version_guid": c.version_guid,
-                "source": c.source, "dataset": c.dataset, "connection": c.connection,
-                "member": c.member, "json_path": c.json_path,
+                "environment": c.environment, "host": c.host, "folder": c.folder,
+                "service": c.service, "source": c.source, "dataset": c.dataset,
+                "connection": c.connection, "member": c.member, "json_path": c.json_path,
             } for c in p.connections],
         } for p in result.projects],
     }
-    Path(path).write_text(json.dumps(payload, indent=1), encoding="utf-8")
+
+
+def write_diagnostics(result, path):
+    Path(path).write_text(json.dumps(diagnostics_payload(result), indent=1), encoding="utf-8")
+
+
+def write_bundle(result, zip_path, workbook=None):
+    """One zip for the maintainer: summary.json (the diagnostics), the
+    workbook, every kept document as raw/<n> <project>/<member>.json (secrets
+    removed at read time), and the app's log files. Returns zip_path."""
+    zip_path = Path(zip_path)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("summary.json", json.dumps(diagnostics_payload(result), indent=1))
+        if workbook and Path(workbook).is_file():
+            zf.write(workbook, WORKBOOK_NAME)
+        for n, p in enumerate(_sorted_projects(result), 1):
+            folder = f"raw/{n:03d} {_SAFE_NAME.sub('_', p.path.stem)[:60]}"
+            for member, text in p.documents:
+                name = _SAFE_NAME.sub("_", member.replace("\\", "/").replace("/", "__"))
+                zf.writestr(f"{folder}/{name}.json", text)
+        for log_file in sorted(Path(LOG_DIR).glob("tsmis*.log*")) if Path(LOG_DIR).is_dir() else []:
+            try:
+                zf.write(log_file, f"logs/{log_file.name}")
+            except OSError as e:
+                log.warning("bundle: could not add %s (%s)", log_file, e)
+    log.info("diagnostics bundle written: %s", zip_path)
+    return zip_path
 
 
 def summary_lines(result, workbook=None):
@@ -143,9 +180,10 @@ def summary_lines(result, workbook=None):
              f"connections, {c['error']} error(s)." + (" (cancelled)" if result.cancelled else "")]
     tally = result.version_tally()
     if tally:
-        parts = [f"{v} ({len(t['projects'])} project{'s' if len(t['projects']) != 1 else ''})"
-                 for v, t in sorted(tally.items(), key=lambda kv: -len(kv[1]["projects"]))]
-        lines.append("Versions found: " + ", ".join(parts))
+        parts = [f"{ver}{' (' + env + ')' if env else ''}: {len(t['projects'])} project"
+                 f"{'s' if len(t['projects']) != 1 else ''}"
+                 for (env, ver), t in sorted(tally.items(), key=lambda kv: (-len(kv[1]["projects"]), kv[0]))]
+        lines.append("Versions found: " + "; ".join(parts))
     if workbook:
         lines.append(f"Workbook saved: {workbook}")
     return lines
@@ -155,7 +193,6 @@ def table_rows(result):
     """JSON-safe rows for the GUI results table."""
     return [{
         "name": p.path.name, "folder": str(p.path.parent), "status": p.status,
-        "status_text": p.status_text, "versions": p.versions(),
+        "status_text": p.status_text, "environments": p.environments(), "versions": p.versions(),
         "layers": len(p.connections), "message": p.message,
-    } for p in sorted(result.projects,
-                      key=lambda p: (str(p.path.parent).lower(), p.path.name.lower()))]
+    } for p in _sorted_projects(result)]

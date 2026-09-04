@@ -3,8 +3,9 @@ TSMIS Branch Identifier
 
 WHAT IT DOES
   Scans a folder of ArcGIS Pro projects (.aprx files) and lists, for each one,
-  the TSMIS branch version its layers are opened on. Results go into an Excel
-  workbook (Projects / Layers / Versions sheets) plus a diagnostics file.
+  the TSMIS branch version its layers are opened on and the environment (prod /
+  dev / test) they come from. Results go into an Excel workbook (Projects /
+  Layers / Versions sheets) plus a diagnostics file.
 
   It reads the project files directly -- an .aprx is a zip of JSON documents,
   and every layer's data connection names the version it uses -- so it needs
@@ -19,9 +20,16 @@ HOW TO RUN
   1. Pick the folder that holds the projects (Browse..., or type the path).
      Subfolders are included by default; the .backups folders ArcGIS Pro
      creates are skipped.
-  2. Click Scan. Each file is listed as it is read.
+  2. Click Scan. The table fills in as files are read; the "Activity" button
+     in the title bar shows the running log.
   3. Open the workbook. Every scan is saved under  "output\<date time>\"  next
      to this app: branch_versions.xlsx and diagnostics.json.
+
+SENDING A DIAGNOSTICS BUNDLE
+  The gear icon -> "Save diagnostics bundle..." scans the folder and saves ONE
+  zip for the maintainer: every project's structure (with passwords removed),
+  the results workbook, and the app's log. Nothing else leaves the PC, and the
+  projects themselves are never changed.
 
   OneDrive: files that are "cloud-only" (not yet on this PC) are downloaded as
   they are read, so a first scan of a OneDrive folder can take a while.
@@ -31,8 +39,8 @@ GOOD TO KNOW
     connections names a version (file geodatabases, shapefiles, or services
     opened without a version).
   * "No data connections" means nothing inside the file looked like a data
-    connection -- send the diagnostics.json to the maintainer so the reader can
-    be taught that project's layout.
+    connection -- save a diagnostics bundle (above) and send it to the
+    maintainer so the reader can be taught that project's layout.
   * The first time you run it, Windows may say the publisher is unknown. That's
     expected for an in-house, unsigned tool: choose "More info" -> "Run anyway".
   * If you received this as a .zip, right-click the zip -> Properties -> tick

@@ -28,7 +28,8 @@ APP_MODULES = ("version", "paths", "settings", "logging_setup", "events", "aprx_
                "scan_output", "updater", "cli", "gui_win32", "gui_worker", "gui_api",
                "gui_main", "self_test")
 
-FEATURE_SERVICE = "https://gis.example.org/server/rest/services/TSMIS/FeatureServer"
+# The real TSMIS host pattern, so the environment rule is exercised end to end.
+FEATURE_SERVICE = "https://gis-prod.example.org/server/rest/services/TSMIS/lrs_tsmis/FeatureServer"
 
 
 def synthetic_aprx(path, version="OWNER.Branch_A", layer="Highways", map_name="Map"):
@@ -90,13 +91,16 @@ def _exercise(tmp, emit):
     assert len(result.projects) == 1, f"expected 1 project, got {len(result.projects)}"
     p = result.projects[0]
     assert p.status == "ok" and p.versions() == ["OWNER.Branch_A"], (p.status, p.versions(), p.message)
+    assert p.environments() == ["Prod"], p.environments()
     workbook, diagnostics = save(result, tmp / "out")
     wb = openpyxl.load_workbook(str(workbook))
     ws = wb["Projects"]
-    assert ws["D2"].value == "OWNER.Branch_A", ws["D2"].value
+    headers = [c.value for c in ws[1]]                 # look columns up by header, never by letter
+    row2 = {h: ws.cell(row=2, column=i + 1).value for i, h in enumerate(headers)}
+    assert row2["Versions"] == "OWNER.Branch_A" and row2["Environments"] == "Prod", row2
     diag = json.loads(diagnostics.read_text(encoding="utf-8"))
     assert diag["files"][0]["connections"][0]["version"] == "OWNER.Branch_A"
-    emit(f"scan: 1 project -> {p.versions()} ; workbook + diagnostics written ok")
+    emit(f"scan: 1 project -> {p.versions()} in {p.environments()} ; workbook + diagnostics written ok")
 
     # 2. GUI bridge: js_api + initial state + bundled ui/ assets.
     import webview

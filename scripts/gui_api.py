@@ -73,14 +73,23 @@ def _ui_index_path():
     return Path(__file__).resolve().parent / "ui" / "index.html"
 
 
-def _pick_folder(window, start):
-    """One native folder dialog -> a path string, or None when cancelled.
-    pywebview returns a list/tuple on some backends and a string on others."""
-    kwargs = {"directory": str(start)} if start and Path(start).is_dir() else {}
-    picked = window.create_file_dialog(webview.FOLDER_DIALOG, **kwargs)
+def _unwrap(picked):
+    """pywebview returns a list/tuple on some backends and a string on others."""
     if not picked:
         return None
     return str(picked[0] if isinstance(picked, (list, tuple)) else picked)
+
+
+def _pick_folder(window, start):
+    """One native folder dialog -> a path string, or None when cancelled."""
+    kwargs = {"directory": str(start)} if start and Path(start).is_dir() else {}
+    return _unwrap(window.create_file_dialog(webview.FOLDER_DIALOG, **kwargs))
+
+
+def _pick_save(window, default_name):
+    """One native Save dialog for a zip -> a path string, or None when cancelled."""
+    return _unwrap(window.create_file_dialog(webview.SAVE_DIALOG, save_filename=default_name,
+                                             file_types=("Zip archive (*.zip)",)))
 
 
 class GuiApi:
@@ -215,6 +224,12 @@ class GuiApi:
                 self._emit_log(line)
             with self._lock:
                 self._last_scan = {k: v for k, v in payload.items() if k != "summary"}
+            if payload.get("bundle"):
+                self._emit_log(f"Diagnostics bundle saved: {payload['bundle']}")
+                self._emit_modal("info", "Diagnostics bundle saved",
+                                 f"{payload['bundle']}\n\nSend this file to the maintainer. It holds "
+                                 "the structure of every project read (passwords removed), the "
+                                 "results workbook, and the app's log.")
         else:
             self._emit_log(f"ERROR: {payload.get('message')}")
             self._emit_modal("error", "Scan failed", str(payload.get("message")))
@@ -296,11 +311,8 @@ class GuiApi:
         ui_log.info("scan folder picked: %s", picked)
         return {"folder": picked}
 
-    @_api_method
-    def start_scan(self, root, recursive=True, include_map_layer_files=False):
-        root = str(root or "").strip()
-        if not root or not Path(root).is_dir():
-            return {"error": "Pick a folder that exists first."}
+    def _begin_scan(self, root, recursive, include_map_layer_files, bundle_path=None):
+        """Claim the gate and start a ScanWorker (shared by the two scan endpoints)."""
         with self._lock:
             if self._task:
                 return {"error": "A scan is already running."}
@@ -309,13 +321,40 @@ class GuiApi:
         self.cancel_event.clear()
         settings.update({"scan_root": root, "recursive": bool(recursive),
                          "include_map_layer_files": bool(include_map_layer_files)})
-        ui_log.info("scan: user started (%s, subfolders=%s, map/layer files=%s)",
-                    root, bool(recursive), bool(include_map_layer_files))
+        ui_log.info("scan: user started (%s, subfolders=%s, map/layer files=%s, bundle=%s)",
+                    root, bool(recursive), bool(include_map_layer_files), bundle_path or "-")
         self._emit({"t": "run_started"})
         self._push_state()
         ScanWorker(self._q, root, bool(recursive), bool(include_map_layer_files),
-                   self.cancel_event).start()
+                   self.cancel_event, bundle_path=bundle_path).start()
         return {"ok": True}
+
+    @_api_method
+    def start_scan(self, root, recursive=True, include_map_layer_files=False):
+        root = str(root or "").strip()
+        if not root or not Path(root).is_dir():
+            return {"error": "Pick a folder that exists first."}
+        return self._begin_scan(root, recursive, include_map_layer_files)
+
+    @_api_method
+    def export_diagnostics(self, root, recursive=True, include_map_layer_files=False):
+        """Scan the folder keeping every document, and write ONE zip for the
+        maintainer: the diagnostics summary, the workbook, every project's
+        JSON with secrets removed, and the app log. The Save dialog comes
+        first so a cancelled pick never claims the gate."""
+        root = str(root or "").strip()
+        if not root or not Path(root).is_dir():
+            return {"error": "Pick a folder that exists first."}
+        if self._task:
+            return {"error": "A scan is already running."}
+        default = f"tsmis_branch_diagnostics_{time.strftime('%Y%m%d_%H%M%S')}.zip"
+        picked = _pick_save(self._window, default)
+        if not picked:
+            return {"cancelled": True}
+        if not picked.lower().endswith(".zip"):
+            picked += ".zip"
+        ui_log.info("diagnostics bundle requested -> %s", picked)
+        return self._begin_scan(root, recursive, include_map_layer_files, bundle_path=picked)
 
     @_api_method
     def cancel_scan(self):

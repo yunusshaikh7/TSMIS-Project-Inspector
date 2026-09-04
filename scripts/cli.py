@@ -1,7 +1,7 @@
 """Console driver: the same scan the window runs, printed.
 
     python scripts\\cli.py                       scan the default folder
-    python scripts\\cli.py "C:\\path\\to\\projects" --no-subfolders --map-layer-files
+    python scripts\\cli.py "C:\\path\\to\\projects" --no-subfolders --map-layer-files --bundle
 
 The only module besides gui_*.py that touches print/sys.exit.
 """
@@ -32,6 +32,8 @@ def main(argv=None):
     ap.add_argument("folder", nargs="?", help="folder to scan (default: the saved/ default folder)")
     ap.add_argument("--no-subfolders", action="store_true", help="scan only the folder itself")
     ap.add_argument("--map-layer-files", action="store_true", help="also read .mapx / .lyrx files")
+    ap.add_argument("--bundle", action="store_true",
+                    help="also write the diagnostics bundle zip (for the maintainer) into the run folder")
     args = ap.parse_args(argv)
 
     root = Path(args.folder or settings.get("scan_root") or default_scan_root())
@@ -43,7 +45,8 @@ def main(argv=None):
         pass
     events = Events(on_log=print)
     try:
-        result = run_scan(root, recursive=recursive, include_map_layer_files=extras, events=events)
+        result = run_scan(root, recursive=recursive, include_map_layer_files=extras, events=events,
+                          keep_documents=args.bundle)
     except ScanError as e:
         print(f"ERROR: {e}")
         return 2
@@ -52,6 +55,10 @@ def main(argv=None):
     for line in summary_lines(result, workbook):
         print(line)
     print(f"Diagnostics saved: {diagnostics}")
+    if args.bundle:
+        from scan_output import write_bundle
+        bundle = write_bundle(result, workbook.parent / "diagnostics_bundle.zip", workbook)
+        print(f"Diagnostics bundle saved: {bundle}")
     return 0
 
 

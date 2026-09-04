@@ -1,10 +1,12 @@
 """GUI bridge checks: build the real GuiApi (no window), drive a real scan
-through ScanWorker + the message pump, and prove the single-task gate.
+and a diagnostics bundle through ScanWorker + the message pump, and prove the
+single-task gate.
 
     python build\\check_gui_bridge.py
 """
 import sys
 import time
+import zipfile
 
 from _checklib import Checker, patch, scripts_path, temp_dir
 
@@ -70,9 +72,10 @@ def main():
             c.check("a second start is refused while running", api.start_scan(str(projects)).get("error"))
             c.check("scan finishes and frees the gate", _wait_idle(api))
         last = api._last_scan
-        c.check("last_scan carries counts, rows and the workbook",
+        c.check("last_scan carries counts, rows (with environments) and the workbook, no bundle",
                 last and last["ok"] and last["counts"]["ok"] == 2 and len(last["rows"]) == 2
-                and last["workbook"].endswith("branch_versions.xlsx"), last)
+                and last["rows"][0]["environments"] == ["Prod"]
+                and last["workbook"].endswith("branch_versions.xlsx") and last["bundle"] is None, last)
         c.check("the scan persisted its settings", settings.get("scan_root") == str(projects)
                 and settings.get("recursive") is True)
         kinds = [e["t"] for e in _drain(api)]
@@ -81,6 +84,29 @@ def main():
                 and kinds[-2:] == ["run_ended", "state"], kinds)
         c.check("a fresh scan can start again after the first", api.start_scan(str(projects)).get("ok")
                 and _wait_idle(api))
+
+        print("diagnostics bundle through the bridge:")
+        with patch(gui_api, "_pick_save", lambda window, default: None):
+            c.check("a cancelled Save dialog claims nothing",
+                    api.export_diagnostics(str(projects)).get("cancelled") and api._task is None)
+        bundle_path = tmp / "bundle" / "diag"          # no .zip on purpose
+        with patch(gui_api, "_pick_save", lambda window, default: str(bundle_path)), \
+                patch(gui_api, "OUTPUT_ROOT", tmp / "output"), \
+                patch(sys.modules["scan_output"], "new_run_dir", lambda now=None: tmp / "output" / "run2"):
+            _drain(api)
+            res = api.export_diagnostics(str(projects), True, False)
+            c.check("export starts a scan under the gate", res.get("ok") and api._task == "scan")
+            c.check("...and finishes", _wait_idle(api))
+        last = api._last_scan
+        c.check("the bundle was written with a .zip suffix and recorded",
+                last and last["bundle"] == str(bundle_path) + ".zip" and (tmp / "bundle" / "diag.zip").is_file(), last)
+        with zipfile.ZipFile(tmp / "bundle" / "diag.zip") as zf:
+            names = zf.namelist()
+        c.check("bundle carries summary, workbook and the raw documents",
+                "summary.json" in names and "branch_versions.xlsx" in names
+                and any(n.startswith("raw/001 One/") for n in names), names)
+        evs = _drain(api)
+        c.check("JS got the saved-bundle modal", any(e["t"] == "modal" and "bundle" in e["title"].lower() for e in evs))
         c.check("update endpoints refuse when nothing is staged",
                 api.update_start().get("error") and api.update_apply().get("error"))
     raise SystemExit(c.summary())

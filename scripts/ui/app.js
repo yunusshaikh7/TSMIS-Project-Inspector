@@ -12,8 +12,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const S = { init: null, st: null, tab: "scan", logLines: 0, logPinned: true, running: false };
+const S = { init: null, st: null, logLines: 0, logPinned: true, running: false };
 const LOG_MAX_LINES = 3000;
+const ACTIVITY_KEY = "tsmis-bi-activity";
 let api = null;
 
 function icon(name, cls = "ic") {
@@ -79,7 +80,24 @@ function fillSettings(settings) {
 
 function setChecked(cb, on) {
   cb.checked = !!on;
-  cb.closest(".option-row").classList.toggle("checked", !!on);
+  const row = cb.closest(".option-row");
+  if (row) row.classList.toggle("checked", !!on);
+}
+
+// ------------------------------------------------------------- panels -----
+function setActivity(on) {
+  $("activityDrawer").classList.toggle("hidden", !on);
+  $("btnActivity").setAttribute("aria-pressed", String(!!on));
+  try { localStorage.setItem(ACTIVITY_KEY, on ? "1" : "0"); } catch (_) { /* session only */ }
+  if (on) scrollLogToEnd();
+}
+function activityWanted() {
+  try { return localStorage.getItem(ACTIVITY_KEY) === "1"; } catch (_) { return false; }
+}
+function setSettings(on) {
+  $("paneSettings").classList.toggle("hidden", !on);
+  $("resultsCard").classList.toggle("hidden", !!on);
+  $("btnSettings").setAttribute("aria-pressed", String(!!on));
 }
 
 // -------------------------------------------------------------- renders ----
@@ -96,6 +114,7 @@ function renderState() {
   $("btnOpenRun").disabled = !(last && last.run_dir);
   renderResults(last);
   renderUpdate(st.update);
+  $("progressStrip").classList.toggle("hidden", !locked);
   if (locked && st.scan) renderProgress(st.scan);
 }
 
@@ -104,7 +123,7 @@ function renderResults(last) {
   if (!last || !last.ok) {
     wrap.classList.add("hidden");
     $("resultsMeta").textContent = "No scan yet";
-    $("resultsSummary").textContent = "Run a scan to list each project and the version(s) its layers use.";
+    $("resultsSummary").textContent = "Pick the folder that holds the projects and click Scan.";
     return;
   }
   const c = last.counts || {};
@@ -112,7 +131,7 @@ function renderResults(last) {
     + (last.cancelled ? " (cancelled)" : "");
   $("resultsSummary").textContent = `${c.ok || 0} with a version · ${c.no_versions || 0} without a version · `
     + `${c.no_connections || 0} without data connections · ${c.error || 0} error${c.error === 1 ? "" : "s"}`
-    + ` — under ${last.root}`;
+    + ` — ${last.root}`;
   body.textContent = "";
   (last.rows || []).forEach((r) => {
     const tr = document.createElement("tr");
@@ -120,13 +139,15 @@ function renderResults(last) {
     const n = document.createElement("span"); n.className = "r-name"; n.textContent = r.name;
     const f = document.createElement("span"); f.className = "r-folder"; f.textContent = r.folder;
     name.append(n, f);
+    const env = document.createElement("td"); env.className = "r-env";
+    env.textContent = (r.environments || []).join(", ") || "—";
     const ver = document.createElement("td"); ver.className = "r-versions";
     ver.textContent = (r.versions || []).join(", ") || "—";
     const layers = document.createElement("td"); layers.className = "num"; layers.textContent = r.layers;
     const status = document.createElement("td"); status.className = "st-" + r.status;
     status.textContent = r.status_text;
     if (r.message) status.title = r.message;
-    tr.append(name, ver, layers, status);
+    tr.append(name, env, ver, layers, status);
     body.appendChild(tr);
   });
   wrap.classList.remove("hidden");
@@ -182,30 +203,23 @@ function renderProgress(p) {
   $("progressFill").style.width = pct + "%";
   $("progressBar").classList.toggle("indeterminate", !total);
   $("progressText").textContent = total ? `Reading file ${Math.min(done + 1, total)} of ${total}` : "Looking for project files…";
-  const sub = $("progressSub");
   const cur = p.current || "";
-  sub.textContent = cur; sub.title = cur;
-  sub.classList.toggle("hidden", !cur);
+  $("progressSub").textContent = cur; $("progressSub").title = cur;
 }
 
 function startRunUi() {
   S.running = true;
-  $("progressCard").classList.add("running");
-  $("progressIcon").querySelector("use").setAttribute("href", "#i-loader");
-  $("progressIcon").classList.add("spin");
+  $("progressStrip").classList.remove("hidden");
   renderProgress({ done: 0, total: 0, current: "" });
 }
 
 function endRunUi() {
   S.running = false;
-  $("progressCard").classList.remove("running");
-  $("progressIcon").querySelector("use").setAttribute("href", "#i-check");
-  $("progressIcon").classList.remove("spin");
+  $("progressStrip").classList.add("hidden");
   $("progressBar").classList.remove("indeterminate");
   $("progressFill").style.width = "0%";
   $("progressPct").textContent = "";
-  $("progressSub").classList.add("hidden");
-  $("progressText").textContent = "Idle — ready to scan";
+  $("progressSub").textContent = "";
 }
 
 // ------------------------------------------------------------------ log ----
@@ -303,11 +317,31 @@ function dispatch(events) {
 }
 
 // --------------------------------------------------------- user actions ----
+function scanArgs() {
+  return [$("scanRoot").value.trim(), $("optRecursive").checked, $("optMapLayer").checked];
+}
+
 async function startScan() {
-  const root = $("scanRoot").value.trim();
+  const [root] = scanArgs();
   if (!root) { showMessage("warning", "Pick a folder", "Type or browse to the folder that holds the ArcGIS Pro projects."); return; }
-  const res = await api.start_scan(root, $("optRecursive").checked, $("optMapLayer").checked);
+  const res = await api.start_scan(...scanArgs());
   if (res && res.error) showMessage("warning", "Can't start the scan", res.error);
+}
+
+async function exportDiagnostics() {
+  const [root] = scanArgs();
+  if (!root) { showMessage("warning", "Pick a folder", "Type or browse to the folder that holds the ArcGIS Pro projects first."); return; }
+  const ok = await showConfirm({
+    title: "Save a diagnostics bundle?",
+    message: "This scans the folder like a normal scan and then saves one zip holding every project's "
+      + "structure (passwords removed), the results workbook and the app's log — the file to send to "
+      + "the maintainer so the reader can be checked against real projects.\n\nA Save dialog asks where to put it.",
+    confirmLabel: "Choose where to save…",
+  });
+  if (!ok) return;
+  setSettings(false);
+  const res = await api.export_diagnostics(...scanArgs());
+  if (res && res.error) showMessage("warning", "Can't start", res.error);
 }
 
 async function onSettingToggle(id, key) {
@@ -318,23 +352,6 @@ async function onSettingToggle(id, key) {
 }
 
 function bindEvents() {
-  const TABS = {
-    scan: { btn: "tabScan", panes: ["paneScan", "resultsCard"], title: "Scan projects",
-            sub: "Point it at a folder of ArcGIS Pro projects; every .aprx inside is read for the branch version its layers are opened on." },
-    settings: { btn: "tabSettings", panes: ["paneSettings"], title: "Settings", sub: "Diagnostics, updates and where things are." },
-  };
-  const setTab = (tab) => {
-    S.tab = tab;
-    Object.entries(TABS).forEach(([key, t]) => {
-      $(t.btn).classList.toggle("active", key === tab);
-      $(t.btn).setAttribute("aria-selected", String(key === tab));
-      t.panes.forEach((p) => $(p).classList.toggle("hidden", key !== tab));
-    });
-    $("panelTitle").textContent = TABS[tab].title;
-    $("panelSub").textContent = TABS[tab].sub;
-  };
-  Object.entries(TABS).forEach(([key, t]) => { $(t.btn).onclick = () => setTab(key); });
-
   renderThemeButton();
   $("btnTheme").onclick = () => {
     const order = ["auto", "light", "dark"];
@@ -343,6 +360,8 @@ function bindEvents() {
     withThemeTransition(() => { applyTheme(); renderThemeButton(); });
     api.ui_event("theme:" + next);
   };
+  $("btnActivity").onclick = () => setActivity($("activityDrawer").classList.contains("hidden"));
+  $("btnSettings").onclick = () => setSettings($("paneSettings").classList.contains("hidden"));
   $("btnUpdate").onclick = onUpdateClick;
   $("appVersion").onclick = () => api.check_updates();
   $("btnCheckUpdates").onclick = () => api.check_updates();
@@ -351,8 +370,6 @@ function bindEvents() {
     const r = await api.pick_scan_folder($("scanRoot").value.trim());
     if (r && r.folder) $("scanRoot").value = r.folder;
   };
-  $("optRecursive").addEventListener("change", () => setChecked($("optRecursive"), $("optRecursive").checked));
-  $("optMapLayer").addEventListener("change", () => setChecked($("optMapLayer"), $("optMapLayer").checked));
   $("btnScan").onclick = startScan;
   $("scanRoot").addEventListener("keydown", (e) => { if (e.key === "Enter" && !$("btnScan").disabled) startScan(); });
   $("btnCancel").onclick = () => api.cancel_scan();
@@ -363,6 +380,7 @@ function bindEvents() {
   };
   $("btnOpenRun").onclick = () => api.open_run_folder();
   $("btnOpenLogs").onclick = () => api.open_logs_folder();
+  $("btnDiagnostics").onclick = exportDiagnostics;
   $("setDebugLog").addEventListener("change", () => onSettingToggle("setDebugLog", "debug_logging"));
   $("setDevtools").addEventListener("change", () => onSettingToggle("setDevtools", "ui_devtools"));
 
@@ -413,6 +431,7 @@ async function boot(realApi) {
   S.init = init;
   buildStatic();
   bindEvents();
+  setActivity(activityWanted());
   S.st = init.state;
   renderState();
   window.__tsmis = {

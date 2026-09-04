@@ -5,16 +5,20 @@ Information Model) — the same JSON a .mapx / .lyrx file holds in the open.
 Every layer that draws data carries a data connection whose
 `workspaceConnectionString` names its workspace as `KEY=value;KEY=value;…`,
 and a branch-versioned feature service (what TSMIS publishes) names the
-version it is opened on right there: `VERSION=<owner.name>`. So the version
-each project works in can be read straight from the file — no arcpy, no
-ArcGIS Pro, no licence.
+version it is opened on right there, e.g.
+
+    URL=https://gis-prod.example.org/server/rest/services/TSMIS/lrs_tsmis/FeatureServer;VERSION=sde.DEFAULT;VERSIONGUID={…}
+
+So the version each project works in — and the environment (the host) and
+service folder it comes from — can be read straight from the file: no arcpy,
+no ArcGIS Pro, no licence.
 
 The reader is deliberately layout-agnostic: it parses EVERY JSON document in
 the archive (sniffed by content, not by file name) and walks it recursively,
 so it does not depend on which folder Pro keeps its maps in. What it saw —
-every member, every CIM type, every connection string with its JSON path —
-is recorded per file for the diagnostics dump, which is how the first run on
-a real project library refines this parser.
+every member, every CIM type, every connection string with its JSON path, and
+(in bundle mode) every document itself, secrets removed — is recorded per
+file, which is how a run on a real project library refines this parser.
 
 Console-free: reports through an Events sink and never prints. A bad file
 never raises; its row says what went wrong.
@@ -28,6 +32,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from events import Events
 
@@ -42,14 +47,29 @@ KINDS = {".aprx": "project", ".mapx": "map file", ".lyrx": "layer file"}
 SKIP_DIRS = frozenset({".backups", "$recycle.bin", "system volume information"})
 
 MAX_MEMBER_BYTES = 256 * 1024 * 1024        # never load a bigger archive member
+# Bundle mode keeps the (redacted) documents themselves; bounded so a giant
+# project library still yields a sendable file.
+MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
+MAX_DOCUMENTS_PER_FILE_BYTES = 40 * 1024 * 1024
 
 # OneDrive Files On-Demand placeholders: reading one downloads it first.
 _FILE_ATTRIBUTE_OFFLINE = 0x1000
 _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000
 
 _SECRET_KEY = re.compile(r"PASSWORD|PASSWD|PWD|TOKEN|SECRET", re.I)
+_SECRET_IN_TEXT = re.compile(r"(PASSWORD|PASSWD|PWD|TOKEN|SECRET)\s*=", re.I)
 
-# Human labels for the CIM workspaceFactory values.
+# Environment words as they appear in a TSMIS host name (gis-prod.example.org),
+# a server site name, or a service folder. First match wins; the bundle from a
+# real project library is what settles the final rule.
+_ENV_TOKENS = (
+    ("prod", "Prod"), ("prd", "Prod"), ("production", "Prod"),
+    ("dev", "Dev"), ("development", "Dev"),
+    ("test", "Test"), ("tst", "Test"), ("uat", "Test"), ("qa", "Test"),
+    ("stage", "Test"), ("staging", "Test"),
+)
+_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
+
 FACTORY_LABELS = {
     "featureservice": "Feature service",
     "sde": "Enterprise geodatabase",
@@ -85,6 +105,10 @@ class Connection:
     version: str = ""             # VERSION=… from the connection string
     version_guid: str = ""        # VERSIONGUID=… when present
     source: str = ""              # service URL / server + database / file path
+    environment: str = ""         # Prod / Dev / Test, read off the host or folder
+    host: str = ""                # the service host (or the SERVER= of a geodatabase)
+    folder: str = ""              # the ArcGIS Server folder(s) between rest/services and the service
+    service: str = ""             # the service name
     dataset: str = ""
     connection: str = ""          # the connection string, secrets removed
     member: str = ""              # the archive member (or the file itself)
@@ -93,6 +117,12 @@ class Connection:
     @property
     def connection_type(self):
         return FACTORY_LABELS.get(self.factory.lower(), self.factory)
+
+    @property
+    def environment_label(self):
+        """What the GUI shows: the environment, else the raw host so an
+        unclassified source is still visible."""
+        return self.environment or self.host
 
 
 @dataclass
@@ -108,6 +138,7 @@ class ProjectResult:
     connections: list = field(default_factory=list)
     members: list = field(default_factory=list)        # diagnostics
     types_seen: dict = field(default_factory=dict)     # diagnostics
+    documents: list = field(default_factory=list)      # bundle mode: [(member, redacted json text)]
     seconds: float = 0.0
 
     @property
@@ -118,8 +149,14 @@ class ProjectResult:
         """Distinct version names, first-seen spelling, case-insensitive."""
         return _distinct(c.version for c in self.connections)
 
+    def environments(self):
+        return _distinct(c.environment_label for c in self.connections)
+
     def sources(self):
         return _distinct(c.source for c in self.connections)
+
+    def service_folders(self):
+        return _distinct(c.folder for c in self.connections)
 
 
 @dataclass
@@ -143,15 +180,17 @@ class ScanResult:
         return by
 
     def version_tally(self):
-        """{version: {"projects": [names], "layers": n}} across the whole scan,
-        keyed by the first-seen spelling of each version."""
+        """{(environment, version): {"projects": [names], "layers": n}} across
+        the whole scan — a branch version name is only unique within one
+        environment, so the pair is the key."""
         tally = {}
         canon = {}
         for p in self.projects:
             for c in p.connections:
                 if not c.version:
                     continue
-                key = canon.setdefault(c.version.lower(), c.version)
+                spelling = canon.setdefault(c.version.lower(), c.version)
+                key = (c.environment_label, spelling)
                 entry = tally.setdefault(key, {"projects": [], "layers": 0})
                 entry["layers"] += 1
                 if p.path.name not in entry["projects"]:
@@ -203,6 +242,45 @@ def describe_source(props):
     return " · ".join(parts)
 
 
+def classify_environment(*texts):
+    """Prod / Dev / Test from the first environment word found in `texts`
+    (each split on every non-alphanumeric character, so `rhapps-prod` and
+    `TSMIS_DEV` both read), else ''."""
+    for text in texts:
+        tokens = _TOKEN_SPLIT.split((text or "").lower())
+        for token, label in _ENV_TOKENS:
+            if token in tokens:
+                return label
+    return ""
+
+
+def parse_service_url(url):
+    """host / site / folder / service / environment for an ArcGIS REST URL:
+    https://gis-prod.example.org/server/rest/services/TSMIS/lrs_tsmis/FeatureServer
+    -> host gis-prod.example.org, site server, folder TSMIS, service lrs_tsmis,
+    environment Prod. Anything that is not such a URL yields blanks."""
+    out = {"host": "", "site": "", "folder": "", "service": "", "environment": ""}
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return out
+    out["host"] = (parts.hostname or "").lower()
+    segs = [s for s in parts.path.split("/") if s]
+    lower = [s.lower() for s in segs]
+    if "rest" in lower and "services" in lower[lower.index("rest") + 1:lower.index("rest") + 2]:
+        i = lower.index("rest")
+        out["site"] = "/".join(segs[:i])
+        rest = segs[i + 2:]
+        # drop the server type + anything after it (FeatureServer/0, MapServer…)
+        stop = next((k for k, s in enumerate(rest) if s.lower().endswith("server")), len(rest))
+        rest = rest[:stop]
+        if rest:
+            out["service"] = rest[-1]
+            out["folder"] = "/".join(rest[:-1])
+    out["environment"] = classify_environment(out["host"], out["site"], out["folder"])
+    return out
+
+
 # ------------------------------------------------------- the JSON walk ------
 
 def _parse_json(data):
@@ -232,13 +310,21 @@ def _connection_from(node, text, member, map_name, owner, path):
     props = parse_connection_string(text)
     name, ctype = owner if owner else ("", "")
     dataset = node.get("dataset", "")
+    source = describe_source(props)
+    svc = parse_service_url(props["URL"]) if props.get("URL") else None
+    if svc is None:
+        host = (props.get("SERVER") or "").lower()
+        environment = classify_environment(host, props.get("INSTANCE"), props.get("DATABASE"))
+        folder = service = ""
+    else:
+        host, folder, service, environment = svc["host"], svc["folder"], svc["service"], svc["environment"]
     return Connection(
         map=map_name, layer=name,
         layer_type=ctype[3:] if ctype.startswith("CIM") else ctype,
         factory=str(node.get("workspaceFactory") or ""),
         version=props.get("VERSION", ""),
         version_guid=props.get("VERSIONGUID", ""),
-        source=describe_source(props),
+        source=source, environment=environment, host=host, folder=folder, service=service,
         dataset=dataset if isinstance(dataset, str) else str(dataset),
         connection=redact_connection_string(text),
         member=member, json_path=path)
@@ -268,11 +354,41 @@ def _collect(node, member, map_name, out, types, ancestors=(), path=""):
                 _collect(value, member, map_name, out, types, ancestors, f"{path}[{i}]")
 
 
-def _harvest(doc, member, res):
+def redact_document(node):
+    """A copy of a parsed document with every secret removed: values under
+    password/token-like keys, and passwords/tokens inside connection strings.
+    Runs before a document is kept for the bundle."""
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if isinstance(key, str) and _SECRET_KEY.search(key):
+                out[key] = "<removed>"
+            else:
+                out[key] = redact_document(value)
+        return out
+    if isinstance(node, list):
+        return [redact_document(v) for v in node]
+    if isinstance(node, str) and _SECRET_IN_TEXT.search(node):
+        return redact_connection_string(node)
+    return node
+
+
+def _harvest(doc, member, res, keep_documents):
     map_name = _document_map_name(doc)
     if map_name and map_name not in res.maps:
         res.maps.append(map_name)
     _collect(doc, member, map_name, res.connections, res.types_seen)
+    if keep_documents:
+        text = json.dumps(redact_document(doc), indent=1)
+        kept = sum(len(t) for _m, t in res.documents)
+        if len(text) > MAX_DOCUMENT_BYTES:
+            res.documents.append((member, json.dumps({"note": "document not kept: too large",
+                                                      "bytes": len(text)})))
+        elif kept + len(text) > MAX_DOCUMENTS_PER_FILE_BYTES:
+            res.documents.append((member, json.dumps({"note": "document not kept: per-file cap reached",
+                                                      "bytes": len(text)})))
+        else:
+            res.documents.append((member, text))
 
 
 # ------------------------------------------------------------- readers -----
@@ -282,7 +398,7 @@ def _is_cloud_only(st):
     return bool(attrs & (_FILE_ATTRIBUTE_OFFLINE | _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS))
 
 
-def _read_archive(path, res):
+def _read_archive(path, res, keep_documents):
     with zipfile.ZipFile(path) as zf:
         for info in zf.infolist():
             if info.is_dir():
@@ -292,18 +408,21 @@ def _read_archive(path, res):
             if info.file_size > MAX_MEMBER_BYTES:
                 entry["note"] = "skipped: too large"
                 continue
-            doc = _parse_json(zf.read(info))
+            data = zf.read(info)
+            doc = _parse_json(data)
             if doc is None:
+                entry["head"] = data[:16].hex()          # what a non-JSON member starts with
                 continue
             entry["json"] = True
             if isinstance(doc, dict):
                 entry["root_type"] = doc.get("type") or ""
+                entry["root_keys"] = sorted(doc.keys())[:40]
                 if doc.get("version"):
                     entry["cim_version"] = str(doc.get("version"))
-            _harvest(doc, info.filename, res)
+            _harvest(doc, info.filename, res, keep_documents)
 
 
-def _read_json_file(path, res):
+def _read_json_file(path, res, keep_documents):
     entry = {"name": path.name, "size": res.size, "json": False}
     res.members.append(entry)
     doc = _parse_json(path.read_bytes())
@@ -312,11 +431,14 @@ def _read_json_file(path, res):
     entry["json"] = True
     if isinstance(doc, dict):
         entry["root_type"] = doc.get("type") or ""
-    _harvest(doc, path.name, res)
+        entry["root_keys"] = sorted(doc.keys())[:40]
+    _harvest(doc, path.name, res, keep_documents)
 
 
-def read_project(path):
-    """Read ONE .aprx / .mapx / .lyrx into a ProjectResult. Never raises."""
+def read_project(path, keep_documents=False):
+    """Read ONE .aprx / .mapx / .lyrx into a ProjectResult. Never raises.
+    `keep_documents` keeps every JSON document (secrets removed) for the
+    diagnostics bundle."""
     path = Path(path)
     res = ProjectResult(path=path, kind=KINDS.get(path.suffix.lower(), "project"))
     t0 = time.monotonic()
@@ -326,9 +448,9 @@ def read_project(path):
         res.modified = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
         res.cloud_only = _is_cloud_only(st)
         if path.suffix.lower() == ".aprx":
-            _read_archive(path, res)
+            _read_archive(path, res, keep_documents)
         else:
-            _read_json_file(path, res)
+            _read_json_file(path, res, keep_documents)
     except zipfile.BadZipFile:
         res.status, res.message = "error", "not a valid project file (not a zip archive)"
     except ValueError as e:
@@ -392,11 +514,13 @@ def find_files(root, recursive=True, extensions=PROJECT_EXTENSIONS, result=None)
 
 def _file_line(res):
     if res.status == "ok":
-        return f"  {res.path.name}: {', '.join(res.versions())}"
+        envs = ", ".join(res.environments())
+        return f"  {res.path.name}: {', '.join(res.versions())}" + (f"  [{envs}]" if envs else "")
     return f"  {res.path.name}: {res.status_text} — {res.message}"
 
 
-def run_scan(root, recursive=True, include_map_layer_files=False, events=None):
+def run_scan(root, recursive=True, include_map_layer_files=False, events=None,
+             keep_documents=False):
     """Scan `root` and return a ScanResult (nothing is written here — see
     scan_output.save). Raises ScanError when the folder cannot be scanned."""
     events = events or Events()
@@ -422,7 +546,7 @@ def run_scan(root, recursive=True, include_map_layer_files=False, events=None):
             events.on_log("Scan cancelled.")
             break
         events.on_progress(i, total, str(path))
-        res = read_project(path)
+        res = read_project(path, keep_documents=keep_documents)
         result.projects.append(res)
         events.on_log(_file_line(res))
     events.on_progress(len(result.projects), total, "")

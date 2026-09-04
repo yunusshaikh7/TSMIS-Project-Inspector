@@ -21,6 +21,9 @@ report machinery.
    `Documents\ArcGIS\Projects`, but any folder works, including a OneDrive one
    such as `…\OneDrive - Example Organization\Documents\01_Projects\TSNR\GIS_Projects`.
 4. **Scan.** Subfolders are included; ArcGIS Pro's `.backups` copies are skipped.
+   The results table lists each project with its environment(s), version(s),
+   layer count and status; the activity log sits behind the title-bar
+   **Activity** button.
 5. **Open workbook.** Each scan is saved under `output\<date time>\` next to
    the app: `branch_versions.xlsx` and `diagnostics.json`.
 
@@ -30,10 +33,16 @@ report machinery.
 
 | Sheet | One row per | Columns |
 |---|---|---|
-| **Projects** | project file | status, the distinct version(s) its layers use, the services they point at, counts, cloud-only flag, size, modified |
-| **Layers** | data connection (usually a layer) | map, layer, layer type, connection type, version, version GUID, service / workspace, dataset, the connection string with passwords removed, and exactly where in the file it was found |
-| **Versions** | distinct version | how many projects and layers use it, and which projects |
+| **Projects** | project file | status, the distinct environment(s) and version(s) its layers use, the service folders and services they point at, counts, cloud-only flag, size, modified |
+| **Layers** | data connection (usually a layer) | map, layer, layer type, connection type, environment, host, service folder, service, version, version GUID, service / workspace, dataset, the connection string with passwords removed, and exactly where in the file it was found |
+| **Versions** | distinct (environment, version) pair | how many projects and layers use it, and which projects |
 | **Scan** | — | the scan parameters and counts |
+
+The **environment** is read off the feature-service host — `gis-prod.example.org`
+reads as Prod, `-dev` as Dev, `-test` / `-uat` / `-qa` as Test — falling back to the
+same words in the server site or folder; anything unclassified shows its host
+instead. The **service folder** is the ArcGIS Server folder between
+`rest/services` and the service name (`TSMIS` in `…/rest/services/TSMIS/lrs_tsmis/FeatureServer`).
 
 Statuses: **OK** (a version was found), **No version found** (data connections
 exist but none names a version — file geodatabases, shapefiles, services opened
@@ -63,10 +72,12 @@ depends on which folder Pro keeps its maps in.
 so the parser was built from the documented CIM shape and proved against
 synthetic projects written in that shape (`build/check_scan.py`). The first run
 on a real project library is what confirms or corrects it — which is why every
-scan also writes `diagnostics.json`: for each file, the archive members, every
-CIM `type` seen, and every connection string (passwords removed) with its JSON
-path. If a project reads as "No data connections", send that file to the
-maintainer; the projects themselves never need to leave the PC.
+scan also writes `diagnostics.json` (for each file, the archive members, every
+CIM `type` seen, and every connection string with its JSON path, passwords
+removed), and why **Settings → Save diagnostics bundle…** exists: it scans the
+folder and saves one zip holding the summary, the workbook, every project's
+JSON documents (passwords removed) and the app log. Send that zip to the
+maintainer; the projects themselves never leave the PC.
 
 Things the reader assumes and the diagnostics will confirm:
 
@@ -81,7 +92,7 @@ Things the reader assumes and the diagnostics will confirm:
 ```bat
 setup (one time).bat        pip install -r requirements.txt (Python 3.11)
 run app.bat                 the window, from source
-scan (console).bat [folder] the same scan, printed
+scan (console).bat [folder] the same scan, printed (--bundle also writes the diagnostics zip)
 ```
 
 Verification (no test framework, just scripts):

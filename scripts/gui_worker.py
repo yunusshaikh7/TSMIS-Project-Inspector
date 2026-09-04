@@ -9,7 +9,7 @@ import threading
 
 from aprx_scan import ScanError, run_scan
 from events import Events
-from scan_output import save, summary_lines, table_rows
+from scan_output import save, summary_lines, table_rows, write_bundle
 
 log = logging.getLogger("tsmis.gui")
 
@@ -22,15 +22,19 @@ class Msg:
 
 
 class ScanWorker(threading.Thread):
-    """Runs one scan, translating engine Events into GUI messages."""
+    """Runs one scan, translating engine Events into GUI messages. With a
+    `bundle_path` it also keeps every document and writes the diagnostics
+    bundle there after the normal results."""
 
-    def __init__(self, queue, root, recursive, include_map_layer_files, cancel_event):
+    def __init__(self, queue, root, recursive, include_map_layer_files, cancel_event,
+                 bundle_path=None):
         super().__init__(daemon=True, name="scan")
         self.q = queue
         self.root = root
         self.recursive = recursive
         self.include_map_layer_files = include_map_layer_files
         self.cancel = cancel_event
+        self.bundle_path = bundle_path
 
     def run(self):
         events = Events(
@@ -41,8 +45,9 @@ class ScanWorker(threading.Thread):
         try:
             result = run_scan(self.root, recursive=self.recursive,
                               include_map_layer_files=self.include_map_layer_files,
-                              events=events)
+                              events=events, keep_documents=bool(self.bundle_path))
             workbook, diagnostics = save(result)
+            bundle = write_bundle(result, self.bundle_path, workbook) if self.bundle_path else None
         except ScanError as e:
             self.q.put((Msg.SCAN_DONE, {"ok": False, "message": str(e)}))
             return
@@ -56,6 +61,7 @@ class ScanWorker(threading.Thread):
             "summary": summary_lines(result, workbook), "rows": table_rows(result),
             "workbook": str(workbook), "diagnostics": str(diagnostics),
             "run_dir": str(workbook.parent), "root": str(result.root),
+            "bundle": str(bundle) if bundle else None,
         }))
 
 
