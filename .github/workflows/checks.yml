@@ -1,0 +1,31 @@
+name: checks
+
+# The fast offline gate on every push / PR: byte-compile everything and run
+# the whole build/check_*.py suite through the one runner. The frozen exe is
+# gated separately by release.yml when a version tag is pushed.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Full offline check suite (blocking)
+        run: python build/run_checks.py -k
