@@ -87,6 +87,27 @@ Things the reader assumes and the diagnostics will confirm:
 - the owning layer/table is the nearest ancestor with both `name` and `type`;
 - a map's name is `mapDefinition.name` (or a root `CIMMap`'s `name`).
 
+## What ships in the folder
+
+"No install, no Python on the target" means the folder carries Python itself
+and the Edge WebView2 bridge, and that is what `_internal\` is:
+
+| Piece | What it is |
+|---|---|
+| `python311.dll`, `*.pyd`, `VCRUNTIME140.dll`, `libssl` / `libcrypto` | the Python runtime, its stdlib extension modules, the VC++ runtime, and TLS for the update check |
+| `pythonnet\runtime\Python.Runtime.dll`, `clr_loader\…\ClrLoader.dll` | the Python-to-.NET bridge pywebview runs on |
+| `webview\lib\Microsoft.Web.WebView2.*.dll`, `WebView2Loader.dll`, `webview\js\` | the WebView2 SDK the window is drawn with (the runtime itself ships with Windows) |
+| `ui\` | this app's own HTML / CSS / JS |
+| `*.dist-info` | package version metadata |
+
+`build/prune_bundle.ps1` strips everything else after PyInstaller runs: loose
+source duplicates, pythonnet's .NET-Framework-4.6 facade assemblies, the
+Windows 7 C-runtime forwarders, other-platform loaders, debug symbols and all
+third-party prose docs, then fails the build if any load-bearing file is
+missing or if any text file carries a credit-card / private-key / SSN pattern
+(the corporate DLP surface). Nothing is UPX-packed, and the exe carries a
+version resource, icon and manifest.
+
 ## Console fallback and development
 
 ```bat

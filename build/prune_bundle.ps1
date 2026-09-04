@@ -63,6 +63,39 @@ if (-not $GuardOnly) {
     Get-ChildItem $internal -Recurse -File -ErrorAction Ignore |
         Where-Object { $_.Name -match '(?i)^(readme|changelog|changes|history|authors|contributing|news)(\.|$)' -and $_.BaseName -notmatch $licenseLike } |
         ForEach-Object { Remove-Item $_.FullName -Force; $removed++ }
+    # --- Runtime pieces this app never loads on Windows 10/11 ------------------
+    # (a) The Universal C Runtime forwarders + ucrtbase are part of Windows 10+
+    #     itself; PyInstaller bundles them for Windows 7/8. VCRUNTIME140.dll stays
+    #     (it is the VC++ redistributable, not in-box).
+    Get-ChildItem $internal -File -Filter "api-ms-win-*.dll" -ErrorAction Ignore |
+        ForEach-Object { Remove-Item $_.FullName -Force; $removed++ }
+    $ucrt = Join-Path $internal "ucrtbase.dll"
+    if (Test-Path $ucrt) { Remove-Item $ucrt -Force; $removed++ }
+    # (b) pythonnet's netstandard facade assemblies (System.*.dll, netstandard.dll)
+    #     are NuGet shims for .NET Framework older than 4.7.2. pythonnet 3 itself
+    #     needs 4.7.2+, whose GAC provides netstandard 2.0, so on any host that can
+    #     run the app they are never loaded. Python.Runtime.dll (+ its deps.json) stays.
+    $pnrt = Join-Path $internal "pythonnet\runtime"
+    Get-ChildItem $pnrt -File -ErrorAction Ignore |
+        Where-Object { $_.Name -notin @("Python.Runtime.dll", "Python.Runtime.deps.json") } |
+        ForEach-Object { Remove-Item $_.FullName -Force; $removed++ }
+    # (c) pywebview pieces for other backends/platforms: the legacy MSHTML interop
+    #     and the Android jar. The edgechromium backend loads only WebView2.Core +
+    #     WebView2.WinForms + the x64 WebView2Loader -- but at import it adds ALL
+    #     THREE runtimes\win-* folders to PATH and raises FileNotFoundError if one
+    #     is missing (the v0.1.1 frozen self-test caught exactly that), so the
+    #     x86 / arm64 loaders (two small files) stay.
+    $wvlib = Join-Path $internal "webview\lib"
+    foreach ($n in @("WebBrowserInterop.x64.dll", "WebBrowserInterop.x86.dll", "pywebview-android.jar")) {
+        $p = Join-Path $wvlib $n
+        if (Test-Path $p) { Remove-Item $p -Force; $removed++ }
+    }
+    # (d) clr_loader's 32-bit loader and every debug-symbol file.
+    $clr32 = Join-Path $internal "clr_loader\ffi\dlls\x86"
+    if (Test-Path $clr32) { Remove-Item $clr32 -Recurse -Force; $removed++ }
+    Get-ChildItem $internal -Recurse -File -Filter *.pdb -ErrorAction Ignore |
+        ForEach-Object { Remove-Item $_.FullName -Force; $removed++ }
+
     # dist-info METADATA embeds each package's whole README; keep the headers only.
     Get-ChildItem $internal -Recurse -File -Filter "METADATA" -ErrorAction Ignore |
         Where-Object { $_.Directory.Name -like "*.dist-info" } |
@@ -79,6 +112,22 @@ if (-not $GuardOnly) {
 }
 
 # --- 2. guard --------------------------------------------------------------
+# The load-bearing files must survive the prune: a pywebview / pythonnet layout
+# change must fail HERE, not on a user's first double-click.
+$loadBearing = @(
+    "python311.dll", "VCRUNTIME140.dll", "ui\index.html",
+    "pythonnet\runtime\Python.Runtime.dll",
+    "clr_loader\ffi\dlls\amd64\ClrLoader.dll",
+    "webview\lib\Microsoft.Web.WebView2.Core.dll",
+    "webview\lib\Microsoft.Web.WebView2.WinForms.dll",
+    "webview\lib\runtimes\win-x64\native\WebView2Loader.dll",
+    "webview\lib\runtimes\win-x86\native\WebView2Loader.dll",
+    "webview\lib\runtimes\win-arm64\native\WebView2Loader.dll"
+)
+$missing = $loadBearing | Where-Object { -not (Test-Path (Join-Path $internal $_)) }
+if ($missing) {
+    throw "GUARD FAILED: load-bearing file(s) missing after the prune:`n  " + ($missing -join "`n  ")
+}
 $leftoverDocs = Get-ChildItem $Target -Recurse -File -Include *.md, *.markdown, *.rst -ErrorAction Ignore |
     Where-Object { $_.BaseName -notmatch $licenseLike }
 if ($leftoverDocs) {

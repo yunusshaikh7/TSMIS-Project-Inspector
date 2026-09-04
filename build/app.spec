@@ -68,14 +68,20 @@ datas += [(os.path.join(UI_DIR, f), "ui") for f in os.listdir(UI_DIR)
           if os.path.isfile(os.path.join(UI_DIR, f))
           and os.path.splitext(f)[1].lower() in _UI_ASSET_EXTS]
 
-# pywebview's Windows backend needs its package data (Python.Runtime.dll, the
-# netstandard facades, the ClrLoader natives, the WebView2 assemblies).
-for _pkg in ("webview", "pythonnet", "clr_loader", "openpyxl"):
-    _d, _b, _h = collect_all(_pkg)
+# pywebview's Windows backend needs its package DATA (Python.Runtime.dll, the
+# ClrLoader natives, the WebView2 assemblies, pywebview's js/). Never the .py
+# files: those are already compiled into the archive, and collect_all's default
+# (include_py_files=True) shipped ~250 loose duplicates. openpyxl needs nothing
+# beyond normal analysis + its contrib hook. prune_bundle.ps1 then drops the
+# pieces this app never loads on Windows 10/11.
+for _pkg in ("webview", "pythonnet", "clr_loader"):
+    _d, _b, _h = collect_all(_pkg, include_py_files=False)
     datas += _d; binaries += _b; hiddenimports += _h
 hiddenimports += ["clr"]
 
-EXCLUDES = ["tkinter", "_tkinter"]
+# No Tk (the UI is WebView2); no bz2/lzma (an .aprx is a deflate zip, and
+# zipfile/shutil tolerate their absence).
+EXCLUDES = ["tkinter", "_tkinter", "bz2", "_bz2", "lzma", "_lzma"]
 _excl = set(EXCLUDES)
 hiddenimports = [h for h in hiddenimports if h.split(".")[0] not in _excl]
 

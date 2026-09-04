@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.1.1 — 2026-09-04
+
+A slimmer bundle, no behavior change. The zip went from 479 files to a fraction
+of that by dropping what the app never loads on Windows 10/11:
+
+- ~250 loose `.py` source files that duplicated the compiled archive
+  (`collect_all` was shipping them alongside).
+- pythonnet's 95 `System.*.dll` / `netstandard.dll` facade assemblies — shims
+  for .NET Framework older than 4.7.2, which pythonnet itself already requires
+  and which every Windows 10/11 provides in-box.
+- The 41 Universal C Runtime forwarder DLLs + `ucrtbase.dll` (part of Windows
+  10+ itself; bundled for Windows 7), the legacy MSHTML interop, the Android
+  jar, the 32-bit / ARM WebView2 loaders, debug symbols, and the bz2/lzma
+  modules an `.aprx` (a deflate zip) never needs.
+- The prune now fails the build if a load-bearing file goes missing, and the
+  frozen exe's own self-test (window included) gates every release.
+
 ## v0.1.0 — 2026-09-04
 
 First release.

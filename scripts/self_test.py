@@ -150,6 +150,13 @@ def _exercise(tmp, emit):
     try:
         webview.start(gui="edgechromium")
     except Exception as e:                # noqa: BLE001
+        # A FROZEN build must open its window: the build machine (this PC, the
+        # GitHub runner) has WebView2, so a failure here is a packaging defect
+        # -- the v0.1.1 prune once removed a folder pywebview probes at import,
+        # and a skip would have shipped it. Only a dev run may lack a display.
+        if getattr(sys, "frozen", False):
+            raise AssertionError(f"gui window failed to start in the frozen build: "
+                                 f"{type(e).__name__}: {e}") from e
         emit(f"gui: window skipped, environment can't start WebView2 ({type(e).__name__}: {e})")
     else:
         watchdog.cancel()
