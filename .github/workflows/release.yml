@@ -27,4 +27,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $releaseAssets = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Name -match "\.(zip|sha256)$" } | ForEach-Object { $_.FullName })
-          gh release create $env:GITHUB_REF_NAME @releaseAssets --title "TSMIS Branch Identifier $env:GITHUB_REF_NAME" --generate-notes
+          gh release create $env:GITHUB_REF_NAME @releaseAssets --title "TSMIS Project Inspector $env:GITHUB_REF_NAME" --generate-notes

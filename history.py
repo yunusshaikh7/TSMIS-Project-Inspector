@@ -92,8 +92,3 @@ class SavedLists:
         with self._lock:
             (self.directory / (folder_key(root) + ".json")).unlink(missing_ok=True)
 
-    def copy_to(self, directory):
-        target = SavedLists(directory)
-        with self._lock:
-            for entry in self.paths():
-                target._write(self.load(entry["root"]))

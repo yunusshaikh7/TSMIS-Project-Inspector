@@ -141,7 +141,9 @@ def interpret(properties, cim, match="tsmis"):
     for item in grouped.values():
         item.update(service_details(item["url"]))
         item["environment"], item["environment_evidence"] = environment(item["host"], item["site"], item["folder"])
-        item["is_tsmis"] = match.casefold() in " ".join([item["url"], item["workspace"], item["dataset"]]).casefold()
+        identifiers = ("tsmis", "tsnr") if match.strip().casefold() in {"tsmis", "tsnr"} else (match.casefold(),)
+        source_text = " ".join([item["url"], item["workspace"], item["dataset"]]).casefold()
+        item["is_tsmis"] = any(identifier in source_text for identifier in identifiers)
         item["version"] = " | ".join(item["versions"])
         item["version_kind"] = "Service version" if "featureserver" in item["url"].lower() else "Database version" if item["version"] else ""
         item["status"] = "Conflicting versions" if len(item["versions"]) > 1 else "Version found" if item["version"] else "Version not exposed"
@@ -208,7 +210,7 @@ def export_bundle(path, result, diagnostics=False):
         if diagnostics:
             metadata["projects"] = projects
         archive.writestr("diagnostics.json" if diagnostics else "scan.json", json.dumps(metadata, ensure_ascii=False, indent=2))
-        archive.writestr("Read me.txt", "TSMIS Branch Identifier\n\nResults describe saved project connections at scan time. Projects are not changed.\n"
+        archive.writestr("Read me.txt", "TSMIS Project Inspector\n\nResults describe saved project connections at scan time. Projects are not changed.\n"
                           "Missing versions are not assumed to be DEFAULT. Unknown environments need review.\n"
                           "Multiple environments or versions may legitimately be used in a project.\n"
                           "CSV files open in Excel. Connections from joins are listed separately.\n"

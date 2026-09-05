@@ -1,6 +1,6 @@
-# TSMIS Branch Identifier
+# TSMIS Project Inspector
 
-[Download the Windows app](https://github.com/yunusshaikh7/TSMIS-Branch-Identifier/releases/latest)
+[Download the Windows app](https://github.com/yunusshaikh7/TSMIS-Project-Inspector/releases/latest)
 
 A small Windows app that finds the saved TSMIS versions and environments in
 ArcGIS Pro projects under a chosen folder. Python + a local HTML interface in
@@ -8,7 +8,7 @@ WebView2, packaged as a portable folder for 64-bit Windows 10/11.
 
 ## Portable folder
 
-Extract the ZIP and open **TSMIS Branch Identifier.exe**. Keep the entire folder
+Extract the ZIP and open **TSMIS Project Inspector.exe**. Keep the entire folder
 when moving it to another location or sharing it with a coworker. Use a writable
 location, such as Documents or a USB drive; there is no installer or admin step.
 
@@ -17,7 +17,8 @@ location, such as Documents or a USB drive; there is no installer or admin step.
 - Browser cache and scan scratch files live in `Data` and are cleaned up after
   use. Moving the app does not depend on the original PC's user profile.
 - Saved project lists are kept in `Data/Lists`, one JSON file per folder path.
-- Updates also stay in `Data`, and the new copy gets its settings and saved lists.
+- Updates stage in `Data/Updates` and replace the app in its original folder.
+  Settings and saved lists stay in place; temporary update files are removed after restart.
   ArcGIS installation discovery may read the registry or an existing per-user
   installation location, but the app does not create a profile there.
 - Windows supplies .NET Framework and WebView2 supplies the window. WebView2 is
@@ -39,26 +40,26 @@ and [downloaded .NET assemblies](https://learn.microsoft.com/en-us/dotnet/framew
 ## Saved lists
 
 A completed scan saves its list automatically, including layer details. The app
-reopens the selected folder's list on startup. **Saved lists**, above the path,
-switches between folders; browsing or entering a path also loads its saved list.
+reopens the selected folder's list on startup. The folder dropdown switches between saved paths and includes **Browseâ€¦**.
+The adjacent **Browseâ€¦** button also selects a new folder and loads any saved list.
 Lists remain viewable when the project folder is temporarily unavailable.
 
 **Refresh** replaces that folder's list after the scan finishes. The footer shows
 when it was last refreshed, in local time. Failed or stopped refreshes leave the
 previous saved list intact; any partial results currently shown are labeled
-incomplete. Select the saved folder again to reload its previous list.
+incomplete. Switch folders and back, or choose the same folder through Browse, to reload its previous list.
 **Clear** removes only the current folder's saved list, leaving projects and other
 saved lists alone. Copying the app folder includes all saved lists.
 
 ## First work-PC test
 
-Copy the extracted **TSMIS Branch Identifier** folder from `dist` to the work PC
-and open **TSMIS Branch Identifier.exe**. Select any project folder; the default
+Copy the extracted **TSMIS Project Inspector** folder from `dist` to the work PC
+and open **TSMIS Project Inspector.exe**. Select any project folder; the default
 is the Windows Documents folder (including redirected OneDrive Documents)
 followed by `ArcGIS`. Subfolders are included by default; `.backups`, `.git` and
 geodatabase folders are skipped.
 
-Click **Settings → Test / diagnostics → Run diagnostic scan**, then **Settings → Test / diagnostics →
+Click **Settings â†’ Test / diagnostics â†’ Run diagnostic scan**, then **Settings â†’ Test / diagnostics â†’
 Save diagnostic ZIP**. Bring back that ZIP to confirm the real environment and
 branch naming. It includes project and layer CSVs, limited connection metadata,
 and read errors. It includes internal server names, local paths and branch owner
@@ -83,7 +84,8 @@ compatibility. The first diagnostic run is the integration test.
 - **Export** writes a ZIP containing two CSVs that open in Excel.
   Partial or cancelled scans are marked incomplete in the accompanying JSON.
 - **Settings** lets you select ArcGIS Python and change the TSMIS substring used
-  to match service URLs, workspace names and datasets (default `tsmis`). All
+  to match service URLs, workspace names and datasets. The default `tsmis` also
+  matches `tsnr`, its former name; this applies to existing settings too. All
   inspected connections are available in layer details and diagnostics.
 
 Environment inference uses whole Dev / Test / Prod tokens (and development,
@@ -128,15 +130,23 @@ Primary references:
 
 ## Updates
 
-**Settings → Check for updates** reads public GitHub releases from
-`yunusshaikh7/TSMIS-Branch-Identifier`. **Download update** verifies its
-SHA-256 checksum and extracts it under `Data/Updates` beside the current app.
-Your settings and saved lists are copied into the new folder. **Open updated app** opens the new
-executable and its folder.
-Use that copy on future launches; the old app remains for rollback. This avoids
-file replacement while running and requires no admin, PowerShell, or batch
-script on the work PC. Each copy keeps its own portable settings. Previously
-downloaded app versions remain until you remove them manually.
+**Settings â†’ Check for updates â†’ Download update â†’ Restart and update**
+checks the ZIP's SHA-256 checksum, closes the app, replaces its executable and
+support files in the same folder, and reopens it. Your shortcut continues to
+open the same path. `Data` and any unrelated files are left in place.
+
+A temporary copy of the previous app is retained until the new interface is
+ready. If replacement or restart fails, the previous app files are restored.
+Successful updates remove their download, staging files, and temporary backup.
+The updater runs within the app's bundled runtime; it needs no admin rights,
+PowerShell, batch file, or separate updater installation.
+
+**One-time migration from v0.3.0:** the repository and app were renamed, and
+that version's updater validates the old repository/asset names. Download this
+release manually. With the old app closed, copy the new executable and `_internal`
+folder into your existing app folder, keeping `Data`, then remove the old
+executable. Open **TSMIS Project Inspector.exe** and update any old shortcut once.
+Subsequent updates replace this copy automatically.
 
 The updater only contacts GitHub when clicked. It works once this repository has
 public releases with the expected ZIP and `.sha256` assets. No release is
@@ -164,12 +174,12 @@ To view the browser-only sample interface, serve `ui` locally and open
 `index.html#demo`. This explicitly labeled preview uses sample projects and never
 runs as a fallback for a real scan.
 
-Release: update `version.py`, commit, tag `v0.3.0` (or the
+Release: update `version.py`, commit, tag `v0.4.0` (or the
 matching new version), and push that tag when ready to publish. The release
 workflow builds and uploads the ZIP and checksum. Normal pushes only run tests.
 
 The app is deliberately flat: `app.py` is the window/bridge, `runtime.py` the
 worker runner, `history.py` the portable saved lists, `worker.py` the ArcPy reader,
 `core.py` interpretation/CSV exports,
-`updater.py` release downloads, and `ui/` the interface. No server, report engine,
+`updater.py` release downloads, `installer.py` app replacement/rollback, and `ui/` the interface. No server, report engine,
 database, login system, or frontend build tool is required.

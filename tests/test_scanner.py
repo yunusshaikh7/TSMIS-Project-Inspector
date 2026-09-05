@@ -56,6 +56,30 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "Conflicting versions")
         self.assertEqual(set(rows[0]["versions"]), {"sde.DEFAULT", "editor.Other"})
 
+    def test_work_project_connection_shapes_and_tsnr_alias(self):
+        # Same metadata shapes as the provided work projects; synthetic hostnames.
+        for host, site, folder, service, expected in (
+            ("rhapps-prod.example.org", "server", "TSMIS", "lrs_tsmis", "Prod"),
+            ("rhapps-prod.example.org", "ars", "TSMIS", "lrs_tsmis_prod", "Prod"),
+            ("rhapps-prod.example.org", "ars", "TSMIS", "lrs_tsmis_prod_ars", "Prod"),
+            ("rhapps-dev.example.org", "ars", "TSNR", "lrs_tsnr_dev", "Dev"),
+        ):
+            with self.subTest(service=service):
+                url = f"https://{host}/{site}/rest/services/{folder}/{service}/FeatureServer"
+                data = {"type": "CIMStandardDataConnection", "workspaceFactory": "FeatureService", "dataset": "3",
+                        "workspaceConnectionString": "URL=" + url + ";VERSION=sde.DEFAULT;VERSIONGUID={00000000-0000-0000-0000-000000000000}"}
+                layer = SimpleNamespace(name="Roads", longName="Roads", isGroupLayer=False,
+                                        supports=lambda name: True, connectionProperties={},
+                                        getDefinition=lambda version: SimpleNamespace(featureTable=SimpleNamespace(dataConnection=SimpleNamespace(**data))))
+                obj = SimpleNamespace(listMaps=lambda: [SimpleNamespace(name="Map", listLayers=lambda: [layer], listTables=lambda: [])])
+                project = read_project("Example.aprx", SimpleNamespace(mp=SimpleNamespace(ArcGISProject=lambda path: obj)))
+                self.assertEqual(project["services"], [service])
+                self.assertEqual(project["versions"], ["sde.DEFAULT"])
+                self.assertEqual(project["environments"], [expected])
+                self.assertEqual(project["status"], "Identified")
+                self.assertTrue(interpret({}, {"dataConnection": data}, match="TSNR")[0]["is_tsmis"])
+                self.assertFalse(interpret({}, {"dataConnection": data}, match="unrelated")[0]["is_tsmis"])
+
     def test_missing_version_is_never_default(self):
         row = interpret(connection(""), {})[0]
         self.assertEqual(row["version"], "")

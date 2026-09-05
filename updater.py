@@ -1,4 +1,4 @@
-"""Manual GitHub release updates, installed in a new folder for easy rollback."""
+"""Verified GitHub downloads staged inside the portable app for replacement updates."""
 import hashlib
 import json
 import re
@@ -19,12 +19,12 @@ def version_tuple(value):
 
 
 def release_asset_name(version):
-    return "TSMIS-Branch-Identifier-v" + version.lstrip("v") + "-win64.zip"
+    return "TSMIS-Project-Inspector-v" + version.lstrip("v") + "-win64.zip"
 
 
 def _request(url):
     # urllib uses the Windows trusted certificate stores, including corporate CAs.
-    return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "TSMIS-Branch-Identifier/" + VERSION}), timeout=30)
+    return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "TSMIS-Project-Inspector/" + VERSION}), timeout=30)
 
 
 def check_release():
@@ -80,7 +80,7 @@ def extract_verified(archive_path, destination):
     return destination / APP_NAME / (APP_NAME + ".exe")
 
 
-def download_release(release, update_root, settings=None, lists_root=None):
+def download_release(release, update_root):
     version_tuple(release["version"])
     destination = Path(update_root) / ("v" + release["version"])
     destination.mkdir(parents=True, exist_ok=True)
@@ -101,18 +101,13 @@ def download_release(release, update_root, settings=None, lists_root=None):
                 output.write(chunk)
         if digest.hexdigest().lower() != checksum.lower():
             raise ValueError("The update checksum did not match. Please download again.")
-        # Extract to a fresh directory. Never overwrite an installed/running app.
+        # Stage first; the installer replaces app files only after the window closes.
         import tempfile
         target = Path(tempfile.mkdtemp(prefix="app-", dir=destination))
         try:
             exe = extract_verified(archive_path, target)
-            if settings is not None:
-                data = exe.parent / "Data"
-                data.mkdir()
-                (data / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
-            if lists_root is not None:
-                from history import SavedLists
-                SavedLists(lists_root).copy_to(exe.parent / "Data" / "Lists")
+            from installer import write_manifest
+            write_manifest(exe)
             return exe
         except Exception:
             shutil.rmtree(target)

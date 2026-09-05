@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from updater import release_asset_name
@@ -104,7 +105,34 @@ coll = COLLECT(exe, a.binaries, a.datas, name=APP_NAME, upx=False)
         env = dict(os.environ, APPDATA=str(Path(folder) / "unused-roaming-profile"),
                    LOCALAPPDATA=str(Path(folder) / "unused-profile"), PYINSTALLER_RESET_ENVIRONMENT="1")
         subprocess.run([str(exe), "--self-test"], env=env, check=True, timeout=30)
-        subprocess.run([str(exe), "--smoke-test", str(proof), "--test-python", sys.executable], env=env, check=True, timeout=60)
+        # Exercise the real update handoff: current window -> staged helper ->
+        # replacement at the original path -> successful restart -> cleanup.
+        from history import SavedLists
+        from installer import write_manifest
+        saved_root = str(Path(folder) / "Previously scanned projects")
+        store = SavedLists(copy / "Data" / "Lists")
+        store.save({"root": saved_root, "complete": True, "projects": []})
+        saved_file = next(store.directory.glob("*.json"))
+        saved_bytes = saved_file.read_bytes()
+        job = copy / "Data" / "Updates" / ("v" + VERSION) / "app-smoke"
+        staged = job / APP_NAME
+        shutil.copytree(bundle, staged)
+        write_manifest(staged / exe.name)
+        (copy / "_internal" / "obsolete-test-file.txt").write_text("Remove on update")
+        initial_proof = work / "before-update-smoke.txt"
+        initial_proof.unlink(missing_ok=True)
+        subprocess.run([str(exe), "--smoke-test", str(initial_proof), "--test-python", sys.executable,
+                        "--stage-update", str(staged / exe.name), str(proof)], env=env, check=True, timeout=60)
+        assert initial_proof.read_text().startswith("PASS"), initial_proof.read_text()
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and (not proof.exists() or job.exists()):
+            error = job / "error"
+            if error.exists():
+                raise RuntimeError(error.read_text(encoding="utf-8"))
+            time.sleep(0.2)
+        assert not job.exists(), "Successful update must remove staging and rollback copies"
+        assert not (copy / "_internal" / "obsolete-test-file.txt").exists(), "Update must remove obsolete support files"
+        assert saved_file.read_bytes() == saved_bytes, "Saved lists must stay unchanged during replacement"
         if not proof.is_file() or not proof.read_text(encoding="utf-8").startswith("PASS"):
             raise SystemExit("Desktop smoke failed: " + (proof.read_text(encoding="utf-8") if proof.exists() else "no result"))
         assert (copy / "Data" / "settings.json").is_file(), "Settings must stay beside the app"
@@ -119,6 +147,7 @@ coll = COLLECT(exe, a.binaries, a.datas, name=APP_NAME, upx=False)
     files = [p for p in bundle.rglob("*") if p.is_file()]
     print(f"Ready: {path} ({path.stat().st_size:,} bytes; {len(files)} files; {sum(p.stat().st_size for p in files):,} bytes extracted)")
     print(proof.read_text(encoding="utf-8"))
+    print("PASS: packaged in-place update, restart at the original path, saved-list preservation, and staging cleanup.")
 
 
 if __name__ == "__main__":

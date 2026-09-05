@@ -1,7 +1,6 @@
 """A small local WebView2 window. ArcPy always runs in a separate interpreter."""
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import threading
@@ -9,7 +8,7 @@ from pathlib import Path
 
 from core import export_bundle
 from history import SavedLists, folder_key, folder_path
-from runtime import ScanRunner, assets, check_webview_runtime, data_dir, default_folder, find_arcgis_python, prepare_desktop, start_external
+from runtime import ScanRunner, assets, check_webview_runtime, data_dir, default_folder, find_arcgis_python, prepare_desktop
 from version import APP_NAME, VERSION
 
 
@@ -38,6 +37,8 @@ class Api:
         self._runner.restore(record)
         self._release = None
         self._downloaded = None
+        self._installing = False
+        self._restart_args = ()
         self._update_lock = threading.Lock()
 
     def _load_list(self, root):
@@ -57,7 +58,7 @@ class Api:
 
     def select_path(self, root):
         with self._runner.lock:
-            if self._runner.state["running"]:
+            if self._runner.state["running"] or self._installing:
                 return {"ok": False, "error": "Finish or stop the refresh before switching folders."}
             try:
                 root = folder_path(root)
@@ -77,7 +78,7 @@ class Api:
 
     def clear_list(self, root):
         with self._runner.lock:
-            if self._runner.state["running"]:
+            if self._runner.state["running"] or self._installing:
                 return {"ok": False, "error": "Stop the refresh before clearing this list."}
             try:
                 if folder_key(root) != folder_key(self._settings["root"]):
@@ -114,7 +115,7 @@ class Api:
 
     def start_scan(self, values, diagnostics=False):
         with self._runner.lock:
-            if self._runner.state["running"]:
+            if self._runner.state["running"] or self._installing:
                 return {"ok": False, "error": "A refresh is already running."}
             saved = self.save_settings(values)
             if not saved["ok"]:
@@ -184,29 +185,42 @@ class Api:
         if not self._update_lock.acquire(blocking=False):
             return {"ok": False, "error": "An update operation is already running."}
         try:
-            self._downloaded = updater.download_release(self._release, data_dir() / "Updates", self._settings, self._lists.directory)
-            return {"ok": True, "message": "Update ready beside this app, with your settings and saved lists copied. Open the updated app to continue."}
+            if not getattr(sys, "frozen", False):
+                raise RuntimeError("Use the packaged Windows app to install updates.")
+            self._downloaded = updater.download_release(self._release, data_dir() / "Updates")
+            return {"ok": True, "message": "Ready. Restart to replace this app and keep your saved lists and settings."}
         except Exception as exc:
             return {"ok": False, "error": "Update could not be downloaded: " + str(exc)}
         finally:
             self._update_lock.release()
 
-    def open_update(self):
-        if self._runner.snapshot()["running"]:
-            return {"ok": False, "error": "Finish or stop your scan before opening the update."}
-        if not self._downloaded or not self._downloaded.is_file():
-            return {"ok": False, "error": "Download the update first."}
+    def install_update(self):
+        import installer
+        if not self._update_lock.acquire(blocking=False):
+            return {"ok": False, "error": "An update operation is already running."}
         try:
-            env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
-            start_external([str(self._downloaded)], cwd=self._downloaded.parent, env=env,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            os.startfile(str(self._downloaded.parent))
-            return {"ok": True, "message": "Updated app opened. Save any results here before closing this window. Use the new folder's app next time."}
-        except OSError:
-            return {"ok": False, "error": "Windows could not open the update. Check your work PC's application restrictions."}
+            with self._runner.lock:
+                if self._runner.state["running"] or self._installing:
+                    return {"ok": False, "error": "Finish or stop your refresh before updating."}
+                if not self._downloaded or not self._downloaded.is_file():
+                    return {"ok": False, "error": "Download the update first."}
+                installer.begin_install(self._downloaded, Path(sys.executable), restart_args=self._restart_args)
+                self._installing = True
+                threading.Timer(0.25, self._window.destroy).start()
+                return {"ok": True, "message": "Restarting and updating this appâ€¦"}
+        except Exception as exc:
+            return {"ok": False, "error": "Update could not start: " + str(exc)}
+        finally:
+            self._update_lock.release()
 
 
 def main():
+    if "--apply-update" in sys.argv:
+        import installer
+        index = sys.argv.index("--apply-update")
+        raise SystemExit(installer.apply_update(Path(sys.executable), sys.argv[index + 1],
+                                               int(sys.argv[index + 2]), sys.argv[index + 3:]))
+    updated = "--updated" in sys.argv
     # The hidden smoke run exercises the actual packaged UI without ArcGIS.
     smoke = "--smoke-test" in sys.argv
     if "--self-test" in sys.argv:
@@ -228,13 +242,20 @@ def main():
         api._window = window
         window.events.closed += api._runner.stop
 
-        def verify_window():
+        def after_start():
             import time
-            target = Path(sys.argv[sys.argv.index("--smoke-test") + 1])
+            target = Path(sys.argv[sys.argv.index("--smoke-test") + 1]) if smoke else None
+            cleanup = None
             try:
                 deadline = time.monotonic() + 30
                 while time.monotonic() < deadline:
                     if window.evaluate_js("document.body.dataset.ready === 'true'"):
+                        if updated:
+                            import installer
+                            index = sys.argv.index("--updated")
+                            cleanup = installer.finish_update(Path(sys.executable), sys.argv[index + 1], int(sys.argv[index + 2]))
+                        if not smoke:
+                            return
                         if "--test-python" in sys.argv:
                             python = sys.argv[sys.argv.index("--test-python") + 1]
                             with tempfile.TemporaryDirectory(prefix="probe-", dir=data_dir()) as folder:
@@ -275,16 +296,29 @@ def main():
                         expected_icon.Dispose()
                         if not api.save_settings(api._settings)["ok"]:
                             raise RuntimeError("Portable settings could not be saved.")
+                        if "--stage-update" in sys.argv:
+                            index = sys.argv.index("--stage-update")
+                            api._downloaded = Path(sys.argv[index + 1])
+                            api._restart_args = ("--smoke-test", sys.argv[index + 2], "--test-python", python)
+                            response = api.install_update()
+                            if not response["ok"]:
+                                raise RuntimeError(response["error"])
                         target.write_text("PASS: downloaded DLLs, WebView2, Python bridge, external worker, per-folder saved lists/reopening/Clear, portable cache, and window icon.", encoding="utf-8")
                         break
                     time.sleep(0.2)
                 else:
-                    target.write_text("FAILED: interface did not become ready.", encoding="utf-8")
+                    raise RuntimeError("The interface did not become ready.")
             except Exception as exc:
-                target.write_text("FAILED: " + str(exc), encoding="utf-8")
+                if target:
+                    target.write_text("FAILED: " + str(exc), encoding="utf-8")
+                elif updated:
+                    window.destroy()
             finally:
-                window.destroy()
-        webview.start(verify_window if smoke else None, gui="edgechromium", icon=str(assets() / "ui" / "app.ico"),
+                if smoke:
+                    if cleanup:
+                        cleanup.join(timeout=15)
+                    window.destroy()
+        webview.start(after_start if smoke or updated else None, gui="edgechromium", icon=str(assets() / "ui" / "app.ico"),
                       private_mode=True, storage_path=session.name)
     except Exception as exc:
         message = "The app could not start.\n\n" + str(exc)
@@ -294,6 +328,8 @@ def main():
             message += "\n\nMove the complete app folder to a location you can write to, such as Documents or a USB drive."
         if smoke:
             Path(sys.argv[sys.argv.index("--smoke-test") + 1]).write_text("FAILED: " + message, encoding="utf-8")
+            raise SystemExit(1)
+        if updated:
             raise SystemExit(1)
         if os.name == "nt":
             import ctypes

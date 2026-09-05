@@ -31,7 +31,7 @@ def prepare_desktop():
     if os.name != "nt":
         return
     import ctypes
-    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TSMIS.BranchIdentifier")
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TSMIS.ProjectInspector")
     if not getattr(sys, "frozen", False):
         return
     import hashlib

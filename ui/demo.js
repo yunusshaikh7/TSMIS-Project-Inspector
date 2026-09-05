@@ -23,7 +23,7 @@
   const persist = () => localStorage.setItem(key,JSON.stringify({preferences,saved}));
   persist();
   window.demoApi = {
-    get_initial_state: async () => ({version:'0.3.0',settings:preferences,arcgis_found:true,state:result,saved_paths:paths()}),
+    get_initial_state: async () => ({version:'0.4.0',settings:preferences,arcgis_found:true,state:result,saved_paths:paths()}),
     choose_folder: async () => preferences.root === base ? second : base, choose_python: async () => preferences.python,
     save_settings: async values => { preferences = values; persist(); return {ok:true}; },
     select_path: async root => { preferences.root=root; result=structuredClone(saved[root] || empty()); persist(); return {ok:true,settings:preferences,state:result,saved_paths:paths()}; },

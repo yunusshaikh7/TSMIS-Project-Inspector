@@ -22,14 +22,10 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:3px soli
 .demo-label { font-size:10px; color:#88642a; background:#fff1d1; padding:3px 6px; border-radius:4px; }
 main { height:calc(100vh - 54px); display:flex; flex-direction:column; gap:12px; padding:16px 20px; }
 .path-controls { display:flex; flex-direction:column; gap:7px; flex-shrink:0; }
-.saved-path-row { display:flex; align-items:center; gap:10px; }
-.saved-path-row label { font-size:11px; color:var(--muted); white-space:nowrap; }
-.saved-path-row select { flex:1; min-width:0; padding:5px 8px; border:1px solid #d5ded7; border-radius:5px; background:white; color:#50665a; font-size:11px; text-overflow:ellipsis; }
-.saved-path-row select:disabled { color:#829086; background:#f8faf8; }
 .folder-row { display:flex; gap:9px; align-items:center; flex-shrink:0; }
 .folder-input { display:flex; gap:9px; align-items:center; background:white; border:1px solid #d5ded7; border-radius:6px; flex:1; min-width:100px; padding-left:11px; }
 .folder-input svg { width:17px; flex-shrink:0; fill:none; stroke:#769280; stroke-width:1.5; }
-.folder-input input { border:0; background:transparent; padding:8px 9px 8px 0; width:100%; min-width:0; color:#45594b; font-size:12px; outline-offset:-2px; }
+.folder-input select { border:0; background:transparent; padding:8px 9px 8px 0; width:100%; min-width:0; color:#45594b; font-size:12px; outline-offset:-2px; }
 .check { display:inline-flex; gap:6px; align-items:center; cursor:pointer; color:#5a6d60; font-size:11px; white-space:nowrap; }
 .check input { accent-color:var(--green); width:13px; height:13px; margin:0; }
 .folder-row .check { margin:0 5px; }

@@ -1,12 +1,12 @@
 import hashlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from history import SavedLists
 import updater
 from version import APP_NAME
 
@@ -20,6 +20,19 @@ class UpdateTests(unittest.TestCase):
             if extra:
                 archive.writestr(extra, b"unexpected")
         return out.getvalue()
+
+    def test_checks_the_renamed_repository_and_package(self):
+        tag = "v9.0.0"
+        name = updater.release_asset_name(tag)
+        self.assertEqual(name, "TSMIS-Project-Inspector-v9.0.0-win64.zip")
+        prefix = "https://github.com/yunusshaikh7/TSMIS-Project-Inspector/releases/download/" + tag + "/"
+        release = {"tag_name": tag, "assets": [{"name": file, "browser_download_url": prefix + file}
+                   for file in (name, name + ".sha256")]}
+        with patch.object(updater, "_request", return_value=io.BytesIO(json.dumps(release).encode())) as request:
+            response = updater.check_release()
+        request.assert_called_once_with("https://api.github.com/repos/yunusshaikh7/TSMIS-Project-Inspector/releases/latest")
+        self.assertTrue(response["available"])
+        self.assertEqual(response["url"], prefix + name)
 
     def test_version_comparison(self):
         self.assertGreater(updater.version_tuple("v0.10.0"), updater.version_tuple("0.2.0"))
@@ -41,14 +54,12 @@ class UpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             previous = Path(folder, "old.exe")
             previous.write_text("old")
-            lists = SavedLists(Path(folder, "Lists"))
-            lists.save({"root": str(Path(folder, "Projects")), "complete": True, "projects": []})
             with patch.object(updater, "_request", side_effect=lambda url: io.BytesIO(hashlib.sha256(archive).hexdigest().encode() if url == "checksum" else archive)):
-                exe = updater.download_release(release, Path(folder, "updates"), {"match": "tsmis"}, lists.directory)
-            self.assertEqual((exe.parent / "Data" / "settings.json").read_text(), '{\n  "match": "tsmis"\n}')
+                exe = updater.download_release(release, Path(folder, "updates"))
+            self.assertFalse((exe.parent / "Data").exists())
+            self.assertTrue((exe.parent.parent / "manifest.json").is_file())
             self.assertEqual(exe.read_bytes(), b"test binary")
             self.assertEqual(previous.read_text(), "old")
-            self.assertEqual(SavedLists(exe.parent / "Data" / "Lists").load(Path(folder, "Projects"))["result"]["projects"], [])
         with tempfile.TemporaryDirectory() as folder:
             with patch.object(updater, "_request", side_effect=lambda url: io.BytesIO(b"0" * 64 if url == "checksum" else archive)):
                 with self.assertRaisesRegex(ValueError, "checksum"):

@@ -3,7 +3,7 @@ const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const emptyState = () => ({projects: [], running: false, has_result: false, last_refreshed: null});
 let api, settings, state = emptyState(), selected = null, activeProject = null, polling = false;
-let savedPaths = [], busy = false, loadingPath = false, pathDirty = false, pathTimer;
+let savedPaths = [], busy = false, loadingPath = false, pathDirty = false, pendingRoot = '';
 let selectionSequence = 0, selectionJob = Promise.resolve();
 const isDemo = location.hash === '#demo';
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text; };
@@ -19,11 +19,19 @@ function resetDetails() {
 }
 function renderSavedPaths(entries = savedPaths) {
   savedPaths = entries;
-  $('savedPaths').replaceChildren(new Option(entries.length ? 'Choose a saved folder…' : 'No saved lists yet', ''));
-  for (const entry of entries) $('savedPaths').add(new Option(entry.root, entry.root));
-  $('savedPaths').value = pathDirty || (state.has_result && (!state.complete || state.save_error)) ? '' : settings.root;
-  $('savedPaths').title = $('savedPaths').value;
+  const root = pendingRoot || settings.root;
+  const paths = [...new Set([root, ...entries.map(entry => entry.root)].filter(Boolean))];
+  $('folder').replaceChildren(...paths.map(path => new Option(path, path)));
+  $('folder').add(new Option('Browse…', '__browse__'));
+  $('folder').value = root;
+  $('folder').title = root;
 }
+async function browseFolder() {
+  renderSavedPaths();
+  const path = await api.choose_folder();
+  if (path) await switchPath(path);
+}
+
 function render() {
   const projects = state.projects;
   $('projectCount').textContent = projects.length;
@@ -31,7 +39,6 @@ function render() {
   $('scanBtn').textContent = state.has_result ? 'Refresh' : 'Scan';
   $('scanBtn').disabled = busy || !$('folder').value.trim();
   for (const id of ['browseBtn','folder']) $(id).disabled = state.running || busy;
-  $('savedPaths').disabled = state.running || busy || !savedPaths.length;
   for (const id of ['recursive','settingsBtn','diagnosticsBtn']) $(id).disabled = state.running || busy || loadingPath;
   for (const id of ['exportBtn','clearBtn']) $(id).disabled = state.running || busy || loadingPath || pathDirty || !state.has_result;
   $('saveDiagnosticsBtn').hidden = state.running || !state.diagnostic_scan;
@@ -52,9 +59,8 @@ function render() {
   renderProjects();
 }
 function switchPath(root) {
-  clearTimeout(pathTimer);
   const sequence = ++selectionSequence;
-  $('folder').value = root;
+  pendingRoot = root;
   pathDirty = true; loadingPath = !!root.trim(); state = emptyState();
   resetDetails(); error(''); notice(''); renderSavedPaths(); render();
   // Serialize selections, skipping superseded requests, so fast path changes
@@ -65,7 +71,7 @@ function switchPath(root) {
       const response = await api.select_path(root);
       if (sequence !== selectionSequence) return;
       if (!response.ok) { error(response.error); return; }
-      settings = response.settings; state = response.state; pathDirty = false;
+      settings = response.settings; state = response.state; pathDirty = false; pendingRoot = '';
       $('folder').value = settings.root; $('recursive').checked = settings.recursive;
       renderSavedPaths(response.saved_paths); error(response.warning || '');
     } catch(e) { if (sequence === selectionSequence) error('Could not load the saved list: ' + e.message); }
@@ -103,7 +109,7 @@ async function startScan(diagnostics) {
   if (busy || state.running) return;
   busy = true; error(''); notice(''); render();
   try {
-    if (pathDirty || loadingPath) await switchPath($('folder').value);
+    if (pathDirty || loadingPath) await switchPath(pendingRoot || $('folder').value);
     else await selectionJob;
     if (pathDirty) return;
     const response = await api.start_scan(values(), diagnostics);
@@ -155,15 +161,13 @@ async function boot(bridge) {
   $('version').textContent = 'v' + initial.version;
   $('runtimeStatus').textContent = initial.arcgis_found ? 'ArcGIS Python located' : 'ArcGIS Pro required';
   $('demoBanner').hidden = !isDemo;
-  bind('browseBtn', async () => { const path = await api.choose_folder(); if (path) await switchPath(path); });
-  $('savedPaths').addEventListener('change', () => { if ($('savedPaths').value) switchPath($('savedPaths').value); });
-  $('folder').addEventListener('input', () => {
-    clearTimeout(pathTimer); ++selectionSequence;
-    pathDirty = true; loadingPath = !!$('folder').value.trim(); state = emptyState();
-    resetDetails(); renderSavedPaths(); render();
-    pathTimer = setTimeout(() => switchPath($('folder').value), 300);
+  bind('browseBtn', browseFolder);
+  $('folder').addEventListener('change', async () => {
+    try {
+      if ($('folder').value === '__browse__') await browseFolder();
+      else await switchPath($('folder').value);
+    } catch(e) { error('Could not choose the folder: ' + e.message); }
   });
-  $('folder').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); switchPath($('folder').value); } });
   bind('scanBtn', () => startScan(false));
   bind('stopBtn', () => api.stop_scan());
   bind('exportBtn', () => saveResults(false));
@@ -185,17 +189,21 @@ async function boot(bridge) {
   document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
   bind('updatesBtn', async () => {
     $('settingsDialog').close(); dialog('updatesDialog'); $('updateMessage').textContent = 'Checking for updates…';
-    $('downloadUpdateBtn').hidden = true; $('openUpdateBtn').hidden = true;
+    $('downloadUpdateBtn').hidden = true; $('installUpdateBtn').hidden = true;
     const result = await api.check_updates();
     $('updateMessage').textContent = result.message || result.error;
     $('downloadUpdateBtn').hidden = !result.available;
   });
   bind('downloadUpdateBtn', async () => {
     $('downloadUpdateBtn').disabled = true; $('updateMessage').textContent = 'Downloading and checking the update…';
-    try { const result = await api.download_update(); $('updateMessage').textContent = result.message || result.error; $('openUpdateBtn').hidden = !result.ok; if (result.ok) $('downloadUpdateBtn').hidden = true; }
+    try { const result = await api.download_update(); $('updateMessage').textContent = result.message || result.error; $('installUpdateBtn').hidden = !result.ok; if (result.ok) $('downloadUpdateBtn').hidden = true; }
     finally { $('downloadUpdateBtn').disabled = false; }
   });
-  bind('openUpdateBtn', async () => { const result = await api.open_update(); $('updateMessage').textContent = result.message || result.error; });
+  bind('installUpdateBtn', async () => {
+    $('installUpdateBtn').disabled = true; $('updateMessage').textContent = 'Preparing to restart…';
+    try { const result = await api.install_update(); $('updateMessage').textContent = result.message || result.error; if (!result.ok) $('installUpdateBtn').disabled = false; }
+    catch(e) { $('installUpdateBtn').disabled = false; throw e; }
+  });
   render();
   document.body.dataset.ready = 'true';
   setInterval(() => { if(state.running) poll(); }, 600);

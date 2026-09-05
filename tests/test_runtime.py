@@ -24,7 +24,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_portable_paths_follow_executable_and_ignore_profile(self):
         with tempfile.TemporaryDirectory() as folder:
-            exe = Path(folder, "Copied app", "TSMIS Branch Identifier.exe")
+            exe = Path(folder, "Copied app", "TSMIS Project Inspector.exe")
             with patch("sys.frozen", True, create=True), patch("sys.executable", str(exe)), patch.dict(os.environ, {"LOCALAPPDATA": "Z:/unavailable"}):
                 self.assertEqual(app_dir(), exe.parent.resolve())
                 self.assertEqual(data_dir(), exe.parent.resolve() / "Data")
