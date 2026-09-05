@@ -3,6 +3,8 @@ import csv
 import io
 import json
 import re
+import tempfile
+from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -63,9 +65,9 @@ def safe_metadata(value, key=""):
     if lower in SAFE_FIELDS:
         text = str(value) if value is not None else ""
         # Do not let an embedded connection string bypass the field allowlist.
-        if re.search(r"(?i)(?:password|pwd|token|secret|credential|customparameters)\s*=", text):
+        if re.search(r"(?i)(?:password|pwd|token|secret|credential|customparameters|api_?key|authorization)\s*=", text):
             return "[withheld]"
-        if "https://" in text or "http://" in text:
+        if re.search(r"https?://", text, re.IGNORECASE):
             return clean_url(text)
         return text
     return "[withheld]"
@@ -169,7 +171,7 @@ def summarize(project):
         status = "Mixed connections"
     else:
         status = "Identified"
-    project.update(versions=versions, environments=environments, status=status,
+    project.update(versions=versions, environments=environments, status=status, read_issues=issues,
                    tsmis_connections=len(connections), folders=sorted({r["folder"] for r in connections if r["folder"]}),
                    services=sorted({r["service"] for r in connections if r.get("service")}, key=str.casefold))
     return project
@@ -203,16 +205,23 @@ LAYER_FIELDS = [("project", "Project path"), ("map", "Map"), ("layer", "Layer / 
 
 def export_bundle(path, result, diagnostics=False):
     projects = result.get("projects", [])
-    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("projects.csv", csv_text(projects, PROJECT_FIELDS))
-        archive.writestr("layers.csv", csv_text([dict(r, project=p["path"]) for p in projects for r in p["rows"]], LAYER_FIELDS))
-        metadata = {k: v for k, v in result.items() if k != "projects"}
-        if diagnostics:
-            metadata["projects"] = projects
-        archive.writestr("diagnostics.json" if diagnostics else "scan.json", json.dumps(metadata, ensure_ascii=False, indent=2))
-        archive.writestr("Read me.txt", "TSMIS Project Inspector\n\nResults describe saved project connections at scan time. Projects are not changed.\n"
-                          "Missing versions are not assumed to be DEFAULT. Unknown environments need review.\n"
-                          "Multiple environments or versions may legitimately be used in a project.\n"
-                          "CSV files open in Excel. Connections from joins are listed separately.\n"
-                          "Diagnostics contain local paths, layer names, branch owners and internal server names.\n"
-                          "Only allowlisted connection metadata is collected; no project files or feature data are included.\n")
+    path = Path(path)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".export-", suffix=".zip", delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        with ZipFile(temporary, "w", ZIP_DEFLATED) as archive:
+            archive.writestr("projects.csv", csv_text(projects, PROJECT_FIELDS))
+            archive.writestr("layers.csv", csv_text([dict(r, project=p["path"]) for p in projects for r in p["rows"]], LAYER_FIELDS))
+            metadata = {k: v for k, v in result.items() if k != "projects"}
+            if diagnostics:
+                metadata["projects"] = projects
+            archive.writestr("diagnostics.json" if diagnostics else "scan.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+            archive.writestr("Read me.txt", "TSMIS Project Inspector\n\nResults describe saved project connections at scan time. Projects are not changed.\n"
+                              "Missing versions are not assumed to be DEFAULT. Unknown environments need review.\n"
+                              "Multiple environments or versions may legitimately be used in a project.\n"
+                              "CSV files open in Excel. Connections from joins are listed separately.\n"
+                              "Diagnostics contain local paths, layer names, branch owners and internal server names.\n"
+                              "Only allowlisted connection metadata is collected; no project files or feature data are included.\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)

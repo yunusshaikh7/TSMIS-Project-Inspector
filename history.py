@@ -20,6 +20,24 @@ def folder_key(value):
     return hashlib.sha256(os.path.normcase(folder_path(value)).encode("utf-8")).hexdigest()
 
 
+def write_json(path, value):
+    """Replace a complete file only after the new JSON has been flushed."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".saving-", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
+
+
 class SavedLists:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -30,6 +48,7 @@ class SavedLists:
         result = record.get("result")
         if (record.get("schema") != 1 or not isinstance(record.get("root"), str) or not isinstance(result, dict)
                 or not result.get("complete") or not isinstance(result.get("projects"), list)
+                or not isinstance(result.get("warnings", []), list)
                 or folder_key(record.get("root", "")) != path.stem
                 or folder_key(result.get("root", "")) != path.stem):
             raise ValueError("Invalid saved list.")
@@ -38,6 +57,7 @@ class SavedLists:
             if (not isinstance(project, dict)
                     or not all(isinstance(project.get(k), list) for k in ("rows", "versions", "environments", "folders", "errors"))
                     or not all(isinstance(project.get(k), str) for k in ("name", "path", "status"))
+                    or not isinstance(project.get("services", []), list)
                     or not all(isinstance(row, dict) for row in project["rows"])):
                 raise ValueError("Invalid saved project.")
         return record
@@ -64,20 +84,6 @@ class SavedLists:
                     continue
         return sorted(entries, key=lambda item: item["refreshed_at"], reverse=True)
 
-    def _write(self, record):
-        self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.directory / (folder_key(record["root"]) + ".json")
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.directory,
-                                             prefix=".saving-", suffix=".tmp", delete=False) as stream:
-                temporary = Path(stream.name)
-                json.dump(record, stream, ensure_ascii=False, separators=(",", ":"))
-            temporary.replace(path)
-        finally:
-            if temporary:
-                temporary.unlink(missing_ok=True)
-
     def save(self, result):
         if not result.get("complete"):
             raise ValueError("Only a finished refresh can replace the saved list.")
@@ -85,7 +91,7 @@ class SavedLists:
         record = {"schema": 1, "root": folder_path(result["root"]),
                   "refreshed_at": refreshed_at, "result": result}
         with self._lock:
-            self._write(record)
+            write_json(self.directory / (folder_key(record["root"]) + ".json"), record)
         return refreshed_at
 
     def clear(self, root):

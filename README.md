@@ -9,13 +9,14 @@ WebView2, packaged as a portable folder for 64-bit Windows 10/11.
 ## Portable folder
 
 Extract the ZIP and open **TSMIS Project Inspector.exe**. Keep the entire folder
-when moving it to another location or sharing it with a coworker. Use a writable
+when moving your copy to another location. Distribute the clean release ZIP to
+coworkers: your used app folder contains saved work metadata in `Data`. Use a writable
 location, such as Documents or a USB drive; there is no installer or admin step.
 
 - Settings are in `Data/settings.json` beside the executable. Nothing is saved
   to AppData. An unavailable saved project or Python path is detected on startup.
 - Browser cache and scan scratch files live in `Data` and are cleaned up after
-  use. Moving the app does not depend on the original PC's user profile.
+  normal exit. Closing the window also stops the ArcGIS reader. Moving the app does not depend on the original PC's user profile.
 - Saved project lists are kept in `Data/Lists`, one JSON file per folder path.
 - Updates stage in `Data/Updates` and replace the app in its original folder.
   Settings and saved lists stay in place; temporary update files are removed after restart.
@@ -40,12 +41,12 @@ and [downloaded .NET assemblies](https://learn.microsoft.com/en-us/dotnet/framew
 ## Saved lists
 
 A completed scan saves its list automatically, including layer details. The app
-reopens the selected folder's list on startup. The folder dropdown switches between saved paths and includes **Browseâ€¦**.
-The adjacent **Browseâ€¦** button also selects a new folder and loads any saved list.
+reopens the selected folder's list on startup. The folder dropdown switches between saved paths and includes **Browse…**.
+The adjacent **Browse…** button also selects a new folder and loads any saved list.
 Lists remain viewable when the project folder is temporarily unavailable.
 
 **Refresh** replaces that folder's list after the scan finishes. The footer shows
-when it was last refreshed, in local time. Failed or stopped refreshes leave the
+when it was last refreshed, in local time. Failed or stopped refreshes, including unreadable subfolders, leave the
 previous saved list intact; any partial results currently shown are labeled
 incomplete. Switch folders and back, or choose the same folder through Browse, to reload its previous list.
 **Clear** removes only the current folder's saved list, leaving projects and other
@@ -57,9 +58,10 @@ Copy the extracted **TSMIS Project Inspector** folder from `dist` to the work PC
 and open **TSMIS Project Inspector.exe**. Select any project folder; the default
 is the Windows Documents folder (including redirected OneDrive Documents)
 followed by `ArcGIS`. Subfolders are included by default; `.backups`, `.git` and
-geodatabase folders are skipped.
+geodatabase folders and linked folders/junctions are skipped. OneDrive placeholders
+remain included; Windows must be able to download their contents.
 
-Click **Settings â†’ Test / diagnostics â†’ Run diagnostic scan**, then **Settings â†’ Test / diagnostics â†’
+Click **Settings → Test / diagnostics → Run diagnostic scan**, then **Settings → Test / diagnostics →
 Save diagnostic ZIP**. Bring back that ZIP to confirm the real environment and
 branch naming. It includes project and layer CSVs, limited connection metadata,
 and read errors. It includes internal server names, local paths and branch owner
@@ -75,7 +77,8 @@ connection metadata and cover grouping, failures, exports, workers, and updates.
 ## What it reports
 
 - One project summary with saved versions, Dev / Test / Prod, and full service names.
-  **Hide empty** filters out projects without matching connections.
+  **Hide empty** filters out projects without matching connections. Unreadable
+  projects remain visible with a small warning beside the name.
   Select a project for individual layer and standalone table
   connections, including both sides of joins. The layer path preserves map
   group names. Service names such as `lrs_tsmis_prod` appear in the main list;
@@ -132,14 +135,17 @@ Primary references:
 
 ## Updates
 
-**Settings â†’ Check for updates â†’ Download update â†’ Restart and update**
+**Settings → Check for updates → Download update → Restart and update**
 checks the ZIP's SHA-256 checksum, closes the app, replaces its executable and
 support files in the same folder, and reopens it. Your shortcut continues to
 open the same path. `Data` and any unrelated files are left in place.
 
+Only one window can use the same app folder at a time.
 A temporary copy of the previous app is retained until the new interface is
 ready. If replacement or restart fails, the previous app files are restored.
 Successful updates remove their download, staging files, and temporary backup.
+If Windows shuts down during replacement, replace the executable and `_internal` with
+the copies from a clean release, keeping `Data`; power-loss recovery cannot be guaranteed.
 The updater runs within the app's bundled runtime; it needs no admin rights,
 PowerShell, batch file, or separate updater installation.
 
@@ -157,7 +163,7 @@ copy a new ZIP to the work PC manually.
 
 ## Development
 
-Python 3.11 on Windows:
+64-bit Python **3.14.7** on Windows (independent of ArcGIS Pro's own Python):
 
 ```text
 python -m venv .venv
@@ -176,9 +182,22 @@ To view the browser-only sample interface, serve `ui` locally and open
 `index.html#demo`. This explicitly labeled preview uses sample projects and never
 runs as a fallback for a real scan.
 
-Release: update `version.py`, commit, tag `v0.4.0` (or the
+Release: update `version.py`, commit, tag `v0.4.2` (or the
 matching new version), and push that tag when ready to publish. The release
-workflow builds and uploads the ZIP and checksum. Normal pushes only run tests.
+workflow builds and uploads the ZIP and checksum. Normal pushes and pull requests
+run the reader tests on Python 3.11 and the full packaged startup/update checks on
+Python 3.14.7; they do not publish a release.
+
+The build pins its dependencies and uses Python's official signed OpenSSL 3.5.8
+security libraries, with a pinned upstream commit and SHA-256 checks. Python and
+ArcGIS updates do not need to match each other. Future runtime/dependency security
+fixes still require a new app release; stable behavior is not a promise of zero maintenance.
+
+The interface loads directly into WebView2, without a local HTTP listener. External
+navigation, dropped files, and browser downloads are blocked. Project text is
+escaped before display, credential fields and URL secrets are redacted, and CSV
+values are protected against spreadsheet formulas. Scan data is not uploaded.
+ArcGIS itself may contact its configured services or licensing server.
 
 The app is deliberately flat: `app.py` is the window/bridge, `runtime.py` the
 worker runner, `history.py` the portable saved lists, `worker.py` the ArcPy reader,

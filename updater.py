@@ -7,7 +7,7 @@ import stat
 import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from version import APP_NAME, REPOSITORY, VERSION
 
@@ -60,18 +60,28 @@ def extract_verified(archive_path, destination):
             raise ValueError("Update package is unexpectedly large.")
         names = set()
         for info in members:
+            if info.compress_type not in {ZIP_STORED, ZIP_DEFLATED}:
+                raise ValueError("Unsupported compression in update package.")
             name = info.filename
+            parts = name.rstrip("/").split("/")
+            reserved = r"(?i)(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?"
+            if any(not p or p in {".", ".."} or p.endswith((" ", "."))
+                   or re.fullmatch(reserved, p) or any(ord(c) < 32 or c in '<>"|?*' for c in p) for p in parts):
+                raise ValueError("Unsafe Windows path in update package.")
             path = PurePosixPath(name)
             if ("\\" in name or ":" in name or path.is_absolute() or ".." in path.parts
                     or not path.parts or path.parts[0] != APP_NAME
                     or stat.S_ISLNK(info.external_attr >> 16)):
                 raise ValueError("Unsafe path in update package.")
-            if len(path.parts) > 1 and path.parts[1] not in {APP_NAME + ".exe", "_internal"}:
+            if (len(path.parts) == 1 and not info.is_dir()
+                    or len(path.parts) > 1 and path.parts[1] not in {APP_NAME + ".exe", "_internal"}
+                    or len(path.parts) > 1 and path.parts[1] == APP_NAME + ".exe" and (len(path.parts) != 2 or info.is_dir())):
                 raise ValueError("Unexpected content in update package.")
             resolved = destination.joinpath(*path.parts).resolve()
-            if not resolved.is_relative_to(destination) or name.lower() in names:
+            canonical = "/".join(parts).casefold()
+            if not resolved.is_relative_to(destination) or canonical in names:
                 raise ValueError("Invalid or duplicate update path.")
-            names.add(name.lower())
+            names.add(canonical)
         if (APP_NAME + "/" + APP_NAME + ".exe").lower() not in names:
             raise ValueError("The update is missing the application.")
         if not any(n.startswith((APP_NAME + "/_internal/ui/").lower()) for n in names):

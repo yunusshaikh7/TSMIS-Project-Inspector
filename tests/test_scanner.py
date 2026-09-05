@@ -182,5 +182,44 @@ class ScannerTests(unittest.TestCase):
         self.assertNotIn("_PYI_APPLICATION_HOME_DIR", env)
 
 
+    def test_unreadable_tree_is_incomplete_even_when_no_projects_were_found(self):
+        with tempfile.TemporaryDirectory() as folder, patch("worker.discover", return_value=([], ["Cannot read folder"])):
+            events = []
+            run({"root": folder}, events.append)
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertFalse(events[-1]["complete"])
+
+    def test_junctions_are_skipped_but_onedrive_placeholders_are_scanned(self):
+        import stat
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ("junction", "cloud"):
+                Path(folder, name).mkdir()
+                Path(folder, name, "Project.aprx").touch()
+            original = Path.lstat
+            def info(path):
+                if path.name in {"junction", "cloud"}:
+                    return SimpleNamespace(st_mode=stat.S_IFDIR, st_reparse_tag=0xA0000003 if path.name == "junction" else 0x9000001A)
+                return original(path)
+            with patch.object(Path, "lstat", info):
+                projects, errors = discover(folder)
+            self.assertEqual(projects, [str(Path(folder, "cloud", "Project.aprx"))])
+            self.assertEqual(errors, [])
+
+    def test_mixed_case_urls_and_embedded_api_keys_are_redacted(self):
+        for value in ("HTTPS://user:NEVER_EXPORT@host.example/TSMIS", "database;API_KEY=NEVER_EXPORT", "server;Authorization=NEVER_EXPORT"):
+            with self.subTest(value=value):
+                self.assertNotIn("NEVER_EXPORT", json.dumps(safe_metadata({"connection_info": {"database": value}})))
+
+    def test_export_failure_preserves_the_existing_zip(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder, "results.zip")
+            path.write_bytes(b"previous export")
+            with patch("core.ZipFile.writestr", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    export_bundle(path, {"projects": []})
+            self.assertEqual(path.read_bytes(), b"previous export")
+            self.assertEqual(list(Path(folder).iterdir()), [path])
+
+
 if __name__ == "__main__":
     unittest.main()

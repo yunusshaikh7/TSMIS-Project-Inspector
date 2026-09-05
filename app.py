@@ -7,8 +7,8 @@ import threading
 from pathlib import Path
 
 from core import export_bundle
-from history import SavedLists, folder_key, folder_path
-from runtime import ScanRunner, assets, check_webview_runtime, data_dir, default_folder, find_arcgis_python, prepare_desktop
+from history import SavedLists, folder_key, folder_path, write_json
+from runtime import AppInstance, ScanRunner, app_dir, assets, check_webview_runtime, clear_browser_cache, close_browser_session, data_dir, default_folder, find_arcgis_python, interface_html, prepare_desktop
 from version import APP_NAME, VERSION
 
 
@@ -107,7 +107,7 @@ class Api:
                         "match": str(values.get("match", "tsmis")).strip()}
             if not settings["match"]:
                 raise ValueError("Enter the TSMIS identifier, usually tsmis.")
-            self._settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+            write_json(self._settings_path, settings)
             self._settings = settings
             return {"ok": True}
         except (OSError, ValueError) as exc:
@@ -207,7 +207,7 @@ class Api:
                 installer.begin_install(self._downloaded, Path(sys.executable), restart_args=self._restart_args)
                 self._installing = True
                 threading.Timer(0.25, self._window.destroy).start()
-                return {"ok": True, "message": "Restarting and updating this appâ€¦"}
+                return {"ok": True, "message": "Restarting and updating this app..."}
         except Exception as exc:
             return {"ok": False, "error": "Update could not start: " + str(exc)}
         finally:
@@ -224,20 +224,27 @@ def main():
     # The hidden smoke run exercises the actual packaged UI without ArcGIS.
     smoke = "--smoke-test" in sys.argv
     if "--self-test" in sys.argv:
+        import ssl
+        if getattr(sys, "frozen", False):
+            assert ssl.OPENSSL_VERSION.startswith("OpenSSL 3.5.8 "), ssl.OPENSSL_VERSION
         from core import interpret
         assert (assets() / "ui" / "index.html").is_file()
         assert interpret({"connection_info": {"url": "https://example-prod.test/server/rest/services/TSMIS/Roads/FeatureServer", "version": "sde.DEFAULT"}}, {})[0]["version"] == "sde.DEFAULT"
         return
-    session = None
+    session = instance = api = None
     try:
+        instance = AppInstance(app_dir())
         prepare_desktop()
         check_webview_runtime()
+        clear_browser_cache(data_dir())
         session = tempfile.TemporaryDirectory(prefix="webview-", dir=data_dir(), ignore_cleanup_errors=True)
         from pythonnet import load
         load("netfx")
         import webview
+        for permission in ("ALLOW_DOWNLOADS", "ALLOW_FILE_URLS", "OPEN_EXTERNAL_LINKS_IN_BROWSER"):
+            webview.settings[permission] = False
         api = Api()
-        window = webview.create_window(APP_NAME, str(assets() / "ui" / "index.html"), js_api=api,
+        window = webview.create_window(APP_NAME, html=interface_html(assets() / "ui"), js_api=api,
                                       width=900, height=600, min_size=(760, 460), background_color="#f5f7f6", hidden=smoke)
         api._window = window
         window.events.closed += api._runner.stop
@@ -250,6 +257,15 @@ def main():
                 deadline = time.monotonic() + 30
                 while time.monotonic() < deadline:
                     if window.evaluate_js("document.body.dataset.ready === 'true'"):
+                        from System import Action
+                        def lock_browser():
+                            browser = window.native.browser.webview
+                            browser.AllowExternalDrop = False
+                            assert not browser.AllowExternalDrop
+                            def local_document(sender, args):
+                                args.Cancel = str(args.Uri) != "about:blank"
+                            browser.NavigationStarting += local_document
+                        window.native.Invoke(Action(lock_browser))
                         if updated:
                             import installer
                             index = sys.argv.index("--updated")
@@ -283,6 +299,15 @@ def main():
                                     raise RuntimeError("Clearing a list affected the wrong folder.")
                                 api.select_path(original["root"])
                                 api.save_settings(original)
+                        if "--test-updates" in sys.argv:
+                            response = api.check_updates()
+                            if not response["ok"]:
+                                raise RuntimeError("HTTPS update check failed: " + response["error"])
+                        window.evaluate_js("window.open('https://example.invalid/'); location.assign('https://example.invalid/'); true")
+                        if not window.evaluate_js("document.body.dataset.ready === 'true'"):
+                            raise RuntimeError("The window did not block external navigation.")
+                        if webview.http.global_server is not None:
+                            raise RuntimeError("The app must not open a local HTTP listener.")
                         if not Path(str(window.native.browser.user_data_folder)).is_relative_to(session.name):
                             raise RuntimeError("Browser data escaped the portable folder.")
                         from System.Drawing import Icon
@@ -311,14 +336,18 @@ def main():
             except Exception as exc:
                 if target:
                     target.write_text("FAILED: " + str(exc), encoding="utf-8")
-                elif updated:
+                else:
+                    if not updated:
+                        import ctypes
+                        ctypes.windll.user32.MessageBoxW(0, "The interface could not start.\n\n" + str(exc) +
+                                                        "\n\nExtract the complete app again. If this continues, ask IT to repair WebView2.", APP_NAME, 0x10)
                     window.destroy()
             finally:
                 if smoke:
                     if cleanup:
                         cleanup.join(timeout=15)
                     window.destroy()
-        webview.start(after_start if smoke or updated else None, gui="edgechromium", icon=str(assets() / "ui" / "app.ico"),
+        webview.start(after_start, gui="edgechromium", icon=str(assets() / "ui" / "app.ico"),
                       private_mode=True, storage_path=session.name)
     except Exception as exc:
         message = "The app could not start.\n\n" + str(exc)
@@ -337,8 +366,14 @@ def main():
         else:
             raise
     finally:
-        if session:
-            session.cleanup()
+        try:
+            if api:
+                api._runner.close()
+            if session:
+                close_browser_session(session)
+        finally:
+            if instance:
+                instance.close()
 
 
 if __name__ == "__main__":

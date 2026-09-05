@@ -134,5 +134,71 @@ with open(path, "w", encoding="utf-8", buffering=1) as out:
             self.assertIn("save_results", public)
 
 
+    @unittest.skipUnless(os.name == "nt", "Windows process mutex")
+    def test_only_one_window_per_app_folder_and_release_on_close(self):
+        from runtime import AppInstance
+        with tempfile.TemporaryDirectory() as folder:
+            first = AppInstance(folder)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "already open"):
+                    AppInstance(str(Path(folder)) + os.sep)
+                separate = AppInstance(Path(folder, "other"))
+                separate.close()
+            finally:
+                first.close()
+            reopened = AppInstance(folder)
+            reopened.close()
+
+    def test_closing_app_waits_for_worker_and_removes_scratch_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            script = root / "worker.py"
+            script.write_text("import time; time.sleep(60)", encoding="utf-8")
+            data = root / "Data"; data.mkdir()
+            runner = ScanRunner()
+            with patch("runtime.assets", return_value=root), patch("runtime.data_dir", return_value=data):
+                runner.start(sys.executable, {"root": folder, "match": "tsmis"})
+                deadline = time.monotonic() + 5
+                while runner.process is None and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                process = runner.process
+                self.assertIsNotNone(process)
+                runner.close()
+            self.assertIsNotNone(process.poll())
+            self.assertFalse(runner.snapshot()["running"])
+            self.assertFalse(list(data.iterdir()))
+
+    def test_done_followed_by_worker_crash_cannot_replace_saved_list(self):
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "worker.py").write_text(
+                'import sys, json\n'
+                'with open(sys.argv[sys.argv.index("--events")+1], "w") as out: out.write(json.dumps({"type":"done", "arcgis_version":"test"})+"\\n")\n'
+                'raise SystemExit(1)\n', encoding="utf-8")
+            saved = Mock()
+            runner = ScanRunner(on_complete=saved)
+            with patch("runtime.assets", return_value=Path(folder)), patch("runtime.data_dir", return_value=Path(folder)):
+                runner.start(sys.executable, {"root": folder, "match": "tsmis"})
+                self.wait(runner)
+            self.assertFalse(runner.snapshot()["complete"])
+            self.assertIn("stopped before finishing", runner.snapshot()["error"])
+            saved.assert_not_called()
+
+    def test_cache_cleanup_preserves_lists_and_unrelated_folders(self):
+        from runtime import clear_browser_cache, close_browser_session
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name in ("webview-abc_1234", "webview-my-notes", "Lists", "Updates"):
+                (root / name).mkdir()
+                (root / name / "keep.txt").write_text("content")
+            clear_browser_cache(root)
+            self.assertFalse((root / "webview-abc_1234").exists())
+            self.assertTrue(all((root / name / "keep.txt").is_file() for name in ("webview-my-notes", "Lists", "Updates")))
+            session = Mock(name=folder)
+            session.name = folder
+            with patch("runtime.Path.exists", side_effect=[True, False]), patch("runtime.time.sleep"):
+                close_browser_session(session)
+            self.assertEqual(session.cleanup.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

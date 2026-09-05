@@ -131,5 +131,46 @@ class SavedListTests(unittest.TestCase):
         self.assertEqual(project["services"], ["lrs_tsmis_prod"])
 
 
+    def test_settings_write_failure_keeps_previous_preferences_on_disk_and_in_memory(self):
+        with tempfile.TemporaryDirectory() as folder, patch("app.data_dir", return_value=Path(folder)):
+            api = Api()
+            self.assertTrue(api.save_settings(dict(api._settings, match="original"))["ok"])
+            old = (Path(folder) / "settings.json").read_bytes()
+            with patch("pathlib.Path.replace", side_effect=PermissionError("read-only")):
+                self.assertFalse(api.save_settings(dict(api._settings, match="replacement"))["ok"])
+            self.assertEqual(api._settings["match"], "original")
+            self.assertEqual((Path(folder) / "settings.json").read_bytes(), old)
+            self.assertFalse(list(Path(folder).glob("*.tmp")))
+
+    def test_folder_read_errors_do_not_overwrite_a_previous_list(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = SavedLists(Path(folder, "Lists"))
+            stamp = store.save(result(folder))
+            runner = ScanRunner(on_complete=store.save)
+            runner.restore(store.load(folder))
+            Path(folder, "worker.py").write_text(
+                'import sys, json\n'
+                'with open(sys.argv[sys.argv.index("--events")+1], "w") as out: out.write(json.dumps({"type":"done", "arcgis_version":"test", "complete":False})+"\\n")\n', encoding="utf-8")
+            with patch("runtime.assets", return_value=Path(folder)), patch("runtime.data_dir", return_value=Path(folder)):
+                runner.start(sys.executable, {"root": folder, "match": "tsmis"})
+                self.wait(runner)
+            self.assertFalse(runner.snapshot()["complete"])
+            self.assertIn("folders could not be read", runner.snapshot()["error"])
+            self.assertEqual(store.load(folder)["refreshed_at"], stamp)
+
+    def test_malformed_optional_ui_fields_are_reported_as_a_damaged_list(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = SavedLists(Path(folder, "Lists"))
+            for field in ("warnings", "services"):
+                sample = result(folder)
+                if field == "warnings":
+                    sample[field] = "not a list"
+                else:
+                    sample["projects"][0][field] = "not a list"
+                store.save(sample)
+                with self.assertRaisesRegex(ValueError, "saved list could not be read"):
+                    store.load(folder)
+
+
 if __name__ == "__main__":
     unittest.main()

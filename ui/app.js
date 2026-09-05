@@ -4,15 +4,17 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'
 const emptyState = () => ({projects: [], running: false, has_result: false, last_refreshed: null});
 let api, settings, state = emptyState(), selected = null, activeProject = null, polling = false;
 let savedPaths = [], busy = false, loadingPath = false, pathDirty = false, pendingRoot = '';
-let selectionSequence = 0, selectionJob = Promise.resolve();
+let detailSequence = 0, selectionSequence = 0, selectionJob = Promise.resolve();
 const isDemo = location.hash === '#demo';
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text; };
 const error = text => { $('alert').textContent = text; $('alert').hidden = !text; };
+const hasReadIssue = p => p.open_error || p.read_issues || p.errors?.length;
 const environmentBadge = value => `<span class="badge ${['dev','test','prod'].includes(String(value).toLowerCase()) ? String(value).toLowerCase() : 'unknown'}">${escapeHtml(value)}</span>`;
 function values() { return {...settings, root: $('folder').value.trim(), recursive: $('recursive').checked}; }
 function bind(id, handler) { $(id).addEventListener('click', async () => { try { await handler(); } catch(e) { error('The action could not finish: ' + (e.message || e)); } }); }
 function dialog(id) { $(id).showModal(); }
 function resetDetails() {
+  ++detailSequence;
   selected = null; activeProject = null;
   $('details').close(); $('search').value = '';
 }
@@ -81,13 +83,14 @@ function switchPath(root) {
 
 function renderProjects() {
   const query = $('search').value.toLowerCase();
-  const filtered = state.projects.map((p, index) => ({...p,index})).filter(p => (!$('hideEmpty').checked || p.tsmis_connections) && [p.path,...p.versions,...p.environments,...(p.services || [])].join(' ').toLowerCase().includes(query));
-  $('projectsBody').innerHTML = filtered.map(p => `<tr data-index="${p.index}" class="${selected === p.index ? 'selected' : ''}"><td><button class="project-link" data-project="${p.index}">${escapeHtml(p.name)}</button><span class="path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</span></td><td>${p.environments.length ? p.environments.map(environmentBadge).join('') : '<span class="muted">—</span>'}</td><td class="mono">${p.versions.length ? p.versions.map(escapeHtml).join('<br>') : '<span class="muted">Not reported</span>'}</td><td>${p.services?.length ? p.services.map(escapeHtml).join('<br>') : '<span class="muted">—</span>'}</td><td aria-hidden="true">›</td></tr>`).join('');
+  const filtered = state.projects.map((p, index) => ({...p,index})).filter(p => (!$('hideEmpty').checked || p.tsmis_connections || hasReadIssue(p)) && [p.path,...p.versions,...p.environments,...(p.services || [])].join(' ').toLowerCase().includes(query));
+  $('projectsBody').innerHTML = filtered.map(p => `<tr data-index="${p.index}" class="${selected === p.index ? 'selected' : ''}"><td><button class="project-link" data-project="${p.index}">${escapeHtml(p.name)}</button>${hasReadIssue(p) ? '<span class="read-issue" title="Some project connections could not be read" aria-label="Read issue"> ⚠</span>' : ''}<span class="path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</span></td><td>${p.environments.length ? p.environments.map(environmentBadge).join('') : '<span class="muted">—</span>'}</td><td class="mono">${p.versions.length ? p.versions.map(escapeHtml).join('<br>') : '<span class="muted">Not reported</span>'}</td><td>${p.services?.length ? p.services.map(escapeHtml).join('<br>') : '<span class="muted">—</span>'}</td><td aria-hidden="true">›</td></tr>`).join('');
   $('noMatches').hidden = !state.projects.length || !!filtered.length;
 }
 async function selectProject(index) {
+  const sequence = ++detailSequence;
   const project = await api.get_project(index);
-  if (!project) return;
+  if (!project || sequence !== detailSequence) return;
   selected = index; activeProject = project;
   $('allLayers').checked = !project.tsmis_connections;
   renderDetails(); renderProjects();

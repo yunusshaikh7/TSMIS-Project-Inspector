@@ -4,6 +4,7 @@ import gc
 import json
 import os
 import platform
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -124,9 +125,20 @@ def discover(root, recursive=True):
     def inaccessible(exc):
         errors.append("Cannot read folder: " + str(exc.filename or root))
 
+    def allowed(directory, name):
+        if name.lower() in {".backups", ".git"} or name.lower().endswith(".gdb"):
+            return False
+        try:
+            info = Path(directory, name).lstat()
+            # Junctions can loop or lead outside the chosen tree. OneDrive cloud
+            # placeholders have different tags and must remain discoverable.
+            return not stat.S_ISLNK(info.st_mode) and getattr(info, "st_reparse_tag", 0) != 0xA0000003
+        except OSError as exc:
+            inaccessible(exc)
+            return False
+
     for directory, dirs, files in os.walk(root, onerror=inaccessible, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if d.lower() not in {".backups", ".git"}
-                         and not d.lower().endswith(".gdb") and not Path(directory, d).is_symlink()) if recursive else []
+        dirs[:] = sorted(d for d in dirs if allowed(directory, d)) if recursive else []
         projects.extend(str(Path(directory, f)) for f in sorted(files) if f.lower().endswith(".aprx"))
     return sorted(projects, key=str.casefold), errors
 
@@ -140,7 +152,7 @@ def run(request, emit, arcpy_module=None):
     files, errors = discover(request["root"], request.get("recursive", True))
     emit({"type": "discovered", "total": len(files), "warnings": errors})
     if not files:
-        emit({"type": "done", "arcgis_version": "Not needed; no projects found"})
+        emit({"type": "done", "arcgis_version": "Not needed; no projects found", "complete": not errors})
         return
     emit({"type": "progress", "message": "Starting ArcGIS Pro's Python reader…"})
     try:
@@ -158,7 +170,7 @@ def run(request, emit, arcpy_module=None):
         emit({"type": "progress", "message": "Reading " + Path(path).name, "current": index + 1})
         project = read_project(path, arcpy_module, result["match"], result["diagnostic_scan"], cim_version)
         emit({"type": "project", "project": project})
-    emit({"type": "done", "arcgis_version": arcgis_version})
+    emit({"type": "done", "arcgis_version": arcgis_version, "complete": not errors})
 
 
 def main():

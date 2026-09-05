@@ -13,6 +13,17 @@ def assets():
     return Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 
 
+def interface_html(directory):
+    directory = Path(directory)
+    html = (directory / "index.html").read_text(encoding="utf-8").replace('<script src="demo.js"></script>', '')
+    for tag, name, opening, closing in (
+            ('<link rel="stylesheet" href="app.css">', "app.css", '<style>', '</style>'),
+            ('<script src="app.js"></script>', "app.js", '<script>', '</script>')):
+        if tag in html:
+            html = html.replace(tag, opening + (directory / name).read_text(encoding="utf-8") + closing)
+    return html
+
+
 def app_dir():
     return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
@@ -25,6 +36,55 @@ def data_dir():
     except OSError as exc:
         raise RuntimeError("Extract the whole app folder to a location you can write to, such as Documents or a USB drive.") from exc
     return path
+
+
+def clear_browser_cache(directory):
+    """Remove only this app's generated cache folders, never saved lists or links."""
+    import re
+    import shutil
+    directory = Path(directory).resolve()
+    for path in directory.glob("webview-*"):
+        if (re.fullmatch(r"webview-[a-z0-9_]{8}", path.name) and path.is_dir()
+                and not path.is_symlink() and path.resolve() == path.absolute()):
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                pass  # An exiting browser or antivirus may still hold a file.
+
+
+def close_browser_session(session):
+    # WebView2 may release its files slightly after the window is gone.
+    for attempt in range(30):
+        session.cleanup()
+        if not Path(session.name).exists():
+            return
+        time.sleep(0.2)
+
+
+class AppInstance:
+    def __init__(self, directory):
+        self.handle = None
+        if os.name != "nt":
+            return
+        import ctypes
+        import hashlib
+        from ctypes import wintypes
+        self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.kernel.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        self.kernel.CreateMutexW.restype = wintypes.HANDLE
+        self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        key = hashlib.sha256(os.path.normcase(str(Path(directory).resolve())).encode("utf-8")).hexdigest()
+        self.handle = self.kernel.CreateMutexW(None, False, "Local\\TSMIS.ProjectInspector." + key)
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            self.close()
+            raise RuntimeError("This app is already open from this folder. Use its existing window.")
+
+    def close(self):
+        if self.handle:
+            self.kernel.CloseHandle(self.handle)
+            self.handle = None
 
 
 def prepare_desktop():
@@ -155,6 +215,7 @@ class ScanRunner:
         self.lock = threading.RLock()
         self.cancelled = threading.Event()
         self.process = None
+        self._thread = None
         self._on_complete = on_complete
         self.state = {"running": False, "message": "Ready to scan", "total": 0, "completed": 0,
                       "error": "", "result": None, "last_refreshed": None, "save_error": ""}
@@ -196,10 +257,22 @@ class ScanRunner:
             self.cancelled.clear()
             self.state.update(running=True, message="Finding projects…", total=0, completed=0, error="", save_error="",
                               result={**request, "python_executable": python, "projects": [], "warnings": [], "complete": False})
-            threading.Thread(target=self._run, args=(python, request), daemon=True).start()
+            self._thread = threading.Thread(target=self._run, args=(python, request), daemon=True)
+            self._thread.start()
 
     def stop(self):
         self.cancelled.set()
+
+    def close(self):
+        self.stop()
+        if self._thread:
+            self._thread.join(timeout=12)
+        process = self.process
+        if process and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
 
     def _event(self, event):
         with self.lock:
@@ -219,7 +292,9 @@ class ScanRunner:
             elif kind == "runtime":
                 result["arcgis_version"] = event["arcgis_version"]
             elif kind == "done":
-                result.update(complete=True, arcgis_version=event["arcgis_version"])
+                result.update(complete=event.get("complete", True), arcgis_version=event["arcgis_version"])
+                if not result["complete"]:
+                    self.state["error"] = "Some folders could not be read. Your previous saved list is unchanged."
                 self.state["message"] = "Scan complete" if self.state["total"] else "No .aprx projects found in this folder"
             elif kind == "fatal":
                 self.state["error"] = event["message"]
@@ -270,7 +345,7 @@ class ScanRunner:
                         time.sleep(0.12)
                 process.wait(timeout=10)
                 with self.lock:
-                    if not self.state["result"]["complete"] and not self.state["error"] and not self.cancelled.is_set():
+                    if (process.returncode != 0 or not self.state["result"]["complete"]) and not self.state["error"] and not self.cancelled.is_set():
                         self.state["error"] = "ArcGIS Python stopped before finishing. Open ArcGIS Pro and sign in, then verify its Python environment in Settings."
         except Exception as exc:
             with self.lock:
@@ -283,6 +358,8 @@ class ScanRunner:
             with self.lock:
                 self.state["result"]["error"] = self.state["error"]
                 self.state["result"]["projects_read"] = self.state["completed"]
+                if self.state["error"] or self.cancelled.is_set():
+                    self.state["result"]["complete"] = False
                 if self.state["result"]["complete"] and self._on_complete:
                     try:
                         self.state["last_refreshed"] = self._on_complete(self.state["result"])
