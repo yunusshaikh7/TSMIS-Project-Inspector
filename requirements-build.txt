@@ -1,5 +1,2 @@
-# Build / packaging dependencies. Installs the runtime deps too.
-# Used by build\build.ps1 inside an isolated build venv.
 -r requirements.txt
 pyinstaller==6.21.0
-pyinstaller-hooks-contrib==2026.6

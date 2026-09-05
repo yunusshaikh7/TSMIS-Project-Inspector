@@ -1,155 +1,126 @@
 # TSMIS Branch Identifier
 
-A small portable Windows app that scans a folder of ArcGIS Pro projects and
-lists, for each `.aprx`, the **TSMIS branch version** its layers are opened on.
-No ArcGIS Pro, no arcpy, no licence: it reads the project files directly.
+[Download the Windows app](https://github.com/yunusshaikh7/TSMIS-Branch-Identifier/releases/latest)
 
-It is the little sibling of the [TSMIS Reports Exporter](https://github.com/yunusshaikh7/TSMIS-Reports-Exporter)
-and shares its architecture — a console-free Python core, an Edge WebView2
-window, a portable single-folder build with bundled Python, a `.bat` console
-fallback, and one-click updates from GitHub releases — with none of its
-report machinery.
+A small Windows app that finds the saved TSMIS versions and environments in
+ArcGIS Pro projects under a chosen folder. Python + a local HTML interface in
+WebView2, packaged as a portable folder. One runtime dependency: `pywebview`.
 
-## Use it
+## First work-PC test
 
-1. Download `TSMIS-Branch-Identifier-v<x.y.z>-win64.zip` from the
-   [latest release](https://github.com/yunusshaikh7/TSMIS-Branch-Identifier/releases/latest),
-   right-click → Properties → **Unblock**, extract anywhere writable.
-2. Double-click `TSMIS Branch Identifier.exe`. (First run: "More info → Run
-   anyway" — it is an in-house unsigned tool.)
-3. Browse to the folder that holds the projects — the default is
-   `Documents\ArcGIS\Projects`, but any folder works, including a OneDrive one
-   such as `…\OneDrive - Example Organization\Documents\01_Projects\TSNR\GIS_Projects`.
-4. **Scan.** Subfolders are included; ArcGIS Pro's `.backups` copies are skipped.
-   The results table lists each project with its environment(s), version(s),
-   layer count and status; the activity log sits behind the title-bar
-   **Activity** button.
-5. **Open workbook.** Each scan is saved under `output\<date time>\` next to
-   the app: `branch_versions.xlsx` and `diagnostics.json`.
+Copy the extracted **TSMIS Branch Identifier** folder from `dist` to the work PC
+and open **TSMIS Branch Identifier.exe**. Select any project folder; the default
+is the Windows Documents folder (including redirected OneDrive Documents)
+followed by `ArcGIS`. Subfolders are included by default; `.backups`, `.git` and
+geodatabase folders are skipped.
 
-`Start Here.txt` inside the zip says the same in user terms.
+Click **Settings → Test / diagnostics → Run diagnostic scan**, then **Settings → Test / diagnostics →
+Save diagnostic ZIP**. Bring back that ZIP to confirm the real environment and
+branch naming. It includes project and layer CSVs, limited connection metadata,
+and read errors. It includes internal server names, local paths and branch owner
+names. Unknown and credential property values are withheld. It does not include
+project files, complete layer definitions, feature data, passwords or URL tokens.
 
-## What the workbook holds
+**Real ArcGIS integration has not been tested on the development PC, which has
+no ArcGIS Pro.** Offline tests exercise extraction, grouping, failures, exports,
+worker execution, and update validation; they do not establish real-project
+compatibility. The first diagnostic run is the integration test.
 
-| Sheet | One row per | Columns |
-|---|---|---|
-| **Projects** | project file | status, the distinct environment(s) and version(s) its layers use, the service folders and services they point at, counts, cloud-only flag, size, modified |
-| **Layers** | data connection (usually a layer) | map, layer, layer type, connection type, environment, host, service folder, service, version, version GUID, service / workspace, dataset, the connection string with passwords removed, and exactly where in the file it was found |
-| **Versions** | distinct (environment, version) pair | how many projects and layers use it, and which projects |
-| **Scan** | — | the scan parameters and counts |
+## What it reports
 
-The **environment** is read off the feature-service host — `gis-prod.example.org`
-reads as Prod, `-dev` as Dev, `-test` / `-uat` / `-qa` as Test — falling back to the
-same words in the server site or folder; anything unclassified shows its host
-instead. The **service folder** is the ArcGIS Server folder between
-`rest/services` and the service name (`TSMIS` in `…/rest/services/TSMIS/lrs_tsmis/FeatureServer`).
+- One project summary with saved versions, Dev / Test / Prod, service folders,
+  and a status. Select a project for individual layer and standalone table
+  connections, including both sides of joins. The layer path preserves map
+  group names. Service folders are separate from map groups.
+- Multiple versions/environments are flagged as **Mixed connections**, which
+  can be intentional. Read errors, unexposed versions and unknown environments
+  are **Needs review**. A project that cannot open does not stop later projects.
+- **Export** writes a ZIP containing two CSVs that open in Excel.
+  Partial or cancelled scans are marked incomplete in the accompanying JSON.
+- **Settings** lets you select ArcGIS Python and change the TSMIS substring used
+  to match service URLs, workspace names and datasets (default `tsmis`). All
+  inspected connections are available in layer details and diagnostics.
 
-Statuses: **OK** (a version was found), **No version found** (data connections
-exist but none names a version — file geodatabases, shapefiles, services opened
-without a version), **No data connections**, **Error** (not a valid project
-file, or it could not be read).
+Environment inference uses whole Dev / Test / Prod tokens (and development,
+production, QA, UAT synonyms) in the server hostname first, then the server site
+or service folder. It never infers environment from a branch name. Unknown or
+conflicting naming stays **Unknown** until the work-PC evidence establishes it.
+The UI and export retain the source URL and inference evidence for review.
 
-## How it works
+## ArcGIS reader
 
-An `.aprx` is a **zip archive of JSON documents** in Esri's CIM (Cartographic
-Information Model) — the same JSON a `.mapx` / `.lyrx` file holds in the open.
-Every layer that draws data carries a data connection whose
-`workspaceConnectionString` names its workspace as `KEY=value;KEY=value;…`, and
-a branch-versioned feature service (what TSMIS publishes) names the version it
-is opened on right there:
+The desktop app locates ArcGIS Pro's Python through its installation registry
+entry or standard installation paths, with a manual choice for cloned/custom
+environments. It launches `worker.py` in that interpreter with a separate process
+and its own DLL search environment. No packages are installed into ArcGIS.
 
-```
-URL=https://<host>/server/rest/services/TSMIS/FeatureServer;VERSION=OWNER.Branch_A;VERSIONGUID={…}
-```
+The worker opens each `.aprx` using `arcpy.mp.ArcGISProject(path)` and inspects
+`listMaps()`, `listLayers()` and `listTables()`. It reads `connectionProperties`
+and CIM `getDefinition('V3')` (`V2` for Pro 2.x), including feature table and joined
+data connections. It does not parse the undocumented APRX archive structure.
+Only metadata is read: there are no `save`, `setDefinition`, geoprocessing edits,
+version changes, or writes to project files. The selected files must be available
+locally; OneDrive may need to hydrate them. Live server availability is not checked.
 
-So the reader (`scripts/aprx_scan.py`) opens each `.aprx` as a zip, parses
-every member that is JSON (sniffed by content, not by name), walks each
-document recursively, and records every `workspaceConnectionString` with the
-layer/table that owns it, the map it is in, and the parsed `VERSION`. It never
-depends on which folder Pro keeps its maps in.
+**Saved version** is deliberately precise: missing values never become
+`sde.DEFAULT`, and a database connection's version is labeled **Database version**
+rather than assumed to be branch versioning. The same source/dataset reported by
+both APIs is merged; contradictory versions are retained and flagged.
+Changes that haven't been saved in ArcGIS Pro are outside the scan.
 
-**The reader has not yet met a real project.** The dev PC has no ArcGIS Pro,
-so the parser was built from the documented CIM shape and proved against
-synthetic projects written in that shape (`build/check_scan.py`). The first run
-on a real project library is what confirms or corrects it — which is why every
-scan also writes `diagnostics.json` (for each file, the archive members, every
-CIM `type` seen, and every connection string with its JSON path, passwords
-removed), and why **Settings → Save diagnostics bundle…** exists: it scans the
-folder and saves one zip holding the summary, the workbook, every project's
-JSON documents (passwords removed) and the app log. Send that zip to the
-maintainer; the projects themselves never leave the PC.
+ArcGIS Pro must be installed and licensed on the work PC. If initialization fails,
+open Pro and sign in; choose your active cloned environment in Settings if needed.
+The app cannot supply an ArcGIS license or bundle ArcPy. A scan can be stopped;
+a worker that produces no progress for five minutes is stopped with partial
+results retained.
 
-Things the reader assumes and the diagnostics will confirm:
+Primary references:
 
-- `.aprx` is a zip whose maps and layers are plain JSON members (UTF-8, optional BOM);
-- data connections are dicts carrying `workspaceConnectionString` (+ `workspaceFactory`, `dataset`);
-- the version rides that string as `VERSION=…` (and `VERSIONGUID=…`);
-- the owning layer/table is the nearest ancestor with both `name` and `type`;
-- a map's name is `mapDefinition.name` (or a root `CIMMap`'s `name`).
+- [Esri: connection properties and joined sources](https://doc.esri.com/en/arcgis-pro/latest/arcpy/mapping/updatingandfixingdatasources.html)
+- [Esri: Python CIM access](https://doc.esri.com/en/arcgis-pro/latest/arcpy/mapping/python-cim-access.html)
+- [Esri: stand-alone Python scripts and licensing](https://doc.esri.com/en/arcgis-pro/latest/arcpy/get-started/using-conda-with-arcgis-pro.html)
+- [PyInstaller: launching external programs](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html#launching-external-programs-from-the-frozen-application)
 
-## What ships in the folder
+## Updates
 
-"No install, no Python on the target" means the folder carries Python itself
-and the Edge WebView2 bridge, and that is what `_internal\` is:
+**Settings → Check for updates** reads public GitHub releases from
+`yunusshaikh7/TSMIS-Branch-Identifier`. **Download update** verifies its
+SHA-256 checksum and extracts it under `%LOCALAPPDATA%\TSMIS Branch Identifier\updates`. **Open updated app** opens the new executable and its folder.
+Use that copy on future launches; the old app remains for rollback. This avoids
+file replacement while running and requires no admin, PowerShell, or batch
+script on the work PC. Settings share the same Local AppData folder. Previously
+downloaded app versions remain until you remove them manually.
 
-| Piece | What it is |
-|---|---|
-| `python311.dll`, `*.pyd`, `VCRUNTIME140.dll`, `libssl` / `libcrypto` | the Python runtime, its stdlib extension modules, the VC++ runtime, and TLS for the update check |
-| `pythonnet\runtime\Python.Runtime.dll`, `clr_loader\…\ClrLoader.dll` | the Python-to-.NET bridge pywebview runs on |
-| `webview\lib\Microsoft.Web.WebView2.*.dll`, `WebView2Loader.dll`, `webview\js\` | the WebView2 SDK the window is drawn with (the runtime itself ships with Windows) |
-| `ui\` | this app's own HTML / CSS / JS |
-| `*.dist-info` | package version metadata |
+The updater only contacts GitHub when clicked. It works once this repository has
+public releases with the expected ZIP and `.sha256` assets. No release is
+published just by building locally. For a private repo or blocked GitHub access,
+copy a new ZIP to the work PC manually.
 
-`build/prune_bundle.ps1` strips everything else after PyInstaller runs: loose
-source duplicates, pythonnet's .NET-Framework-4.6 facade assemblies, the
-Windows 7 C-runtime forwarders, other-platform loaders, debug symbols and all
-third-party prose docs, then fails the build if any load-bearing file is
-missing or if any text file carries a credit-card / private-key / SSN pattern
-(the corporate DLP surface). Nothing is UPX-packed, and the exe carries a
-version resource, icon and manifest.
+## Development
 
-## Console fallback and development
+Python 3.11 on Windows:
 
-```bat
-setup (one time).bat        pip install -r requirements.txt (Python 3.11)
-run app.bat                 the window, from source
-scan (console).bat [folder] the same scan, printed (--bundle also writes the diagnostics zip)
+```text
+python -m pip install -r requirements-build.txt
+python app.py
+python -m unittest discover -s tests -v
+python build.py
 ```
 
-Verification (no test framework, just scripts):
+`build.py` runs the tests, creates the portable app, checks the packaged window
+and Python bridge in a hidden WebView2 run, then writes the versioned ZIP and
+checksum into `dist`. ArcPy is never packaged. The work PC does not need pip or
+a separate Python installation. See **Start Here.txt** inside the release.
 
-```bat
-python build\run_checks.py -k        the whole offline suite (scanner, writer, bridge, updater, packaging inventory)
-python build\full_smoke.py           the shared self-test, incl. a hidden WebView2 window cycle
-powershell -ExecutionPolicy Bypass -File build\build.ps1 -SelfTest
-                                     the portable build + the EXACT exe's --self-test
-```
+To view the browser-only sample interface, serve `ui` locally and open
+`index.html#demo`. This explicitly labeled preview uses sample projects and never
+runs as a fallback for a real scan.
 
-A browser preview of the UI needs no Python: serve `scripts/ui` and open
-`index.html#mock` (the `.claude/launch.json` entry does that on port 8767).
+Release: update `version.py` and `Start Here.txt`, commit, tag `v0.2.0` (or the
+matching new version), and push that tag when ready to publish. The release
+workflow builds and uploads the ZIP and checksum. Normal pushes only run tests.
 
-## Releasing
-
-1. Bump `version.py`, add a `## v<x.y.z>` section to `CHANGELOG.md`, commit.
-2. `git tag v<x.y.z>` and `git push origin refs/tags/v<x.y.z>`.
-3. `release.yml` re-runs the checks, builds with `-SelfTest`, zips, publishes
-   the zip + its `.sha256` as a GitHub release with the CHANGELOG section as
-   the notes. Installed copies see it at their next start (or when the version
-   chip is clicked) and update themselves.
-
-## Repo layout
-
-```
-version.py                   app name + version (single source of truth)
-scripts/
-  aprx_scan.py               the reader: find files, open the zip, walk the JSON, parse connection strings
-  scan_output.py             workbook + diagnostics + summary + GUI rows
-  events.py paths.py settings.py logging_setup.py    the plumbing
-  cli.py                     console driver
-  gui_main.py gui_api.py gui_worker.py gui_win32.py  the window (pywebview / WebView2)
-  updater.py                 one-click update from GitHub releases (checksum-verified, two-phase swap)
-  self_test.py               the shared self-test body (frozen exe + dev)
-  ui/                        index.html app.css app.js mock.js — no framework, no build step
-build/                       app.spec, build.ps1, prune_bundle.ps1, the check_*.py suite, run_checks.py
-.github/workflows/           checks.yml (every push), release.yml (v* tags)
-```
+The app is deliberately flat: `app.py` is the window/bridge, `runtime.py` the
+worker runner, `worker.py` the ArcPy reader, `core.py` interpretation/CSV exports,
+`updater.py` release downloads, and `ui/` the interface. No server, report engine,
+database, login system, or frontend build tool is required.

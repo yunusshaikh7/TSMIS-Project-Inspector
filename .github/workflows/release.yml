@@ -1,90 +1,30 @@
-name: release
-
-# Builds the portable app and publishes it as a GitHub release whenever a
-# version tag (v*) is pushed. The build runs the EXACT shipped exe's
-# `--self-test` over the pruned bundle, so a broken bundle can never ship. The
-# release carries the zip + its .sha256, which the in-app updater verifies.
-
+name: Windows release
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag (e.g. v0.1.0); created at the chosen ref if it doesn't exist"
-        required: true
-
+    tags: ['v*']
 permissions:
   contents: write
-
 jobs:
-  offline-checks:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 20
-    env:
-      PYTHONIOENCODING: utf-8
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install runtime deps
+          python-version: '3.11'
+      - name: Verify version
+        shell: python
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Run the full offline check suite
-        run: python build/run_checks.py -k
-
-  build-and-release:
-    needs: offline-checks
-    runs-on: windows-latest
-    timeout-minutes: 45
-    env:
-      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      PYTHONIOENCODING: utf-8
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Verify the tag matches version.py
+          import os
+          import runpy
+          version = runpy.run_path("version.py")["VERSION"]
+          assert os.environ['GITHUB_REF_NAME'] == 'v' + version
+      - run: python -m pip install -r requirements-build.txt
+      - run: python build.py
+      - name: Publish portable app
         shell: pwsh
-        run: |
-          $m = Select-String -Path version.py -Pattern '__version__\s*=\s*"([^"]+)"'
-          if (-not $m) { throw "Could not read __version__ from version.py" }
-          $expected = "v" + $m.Matches[0].Groups[1].Value
-          if ($env:TAG -ne $expected) {
-            throw "Release tag '$env:TAG' does not match version.py ('$expected'). Bump version.py or fix the tag."
-          }
-          Write-Host "OK: tag $env:TAG matches version.py."
-
-      - name: Assemble release notes (fails fast if CHANGELOG has no section)
-        run: python build/gen_release_notes.py "$env:TAG" -o notes.md
-
-      - name: Build + gate the app (exact-artifact self-test)
-        run: powershell -ExecutionPolicy Bypass -File build\build.ps1 -SelfTest
-
-      - name: Zip the gated artifact
-        run: Compress-Archive -Path "dist\TSMIS Branch Identifier" -DestinationPath "TSMIS-Branch-Identifier-$env:TAG-win64.zip"
-
-      - name: Publish the SHA-256 checksum (ASCII, no BOM)
-        shell: pwsh
-        run: |
-          $zip = "TSMIS-Branch-Identifier-$env:TAG-win64.zip"
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  $zip" | Out-File "$zip.sha256" -Encoding ascii
-          Write-Host "$hash  $zip"
-          if (-not (Test-Path $zip) -or -not (Test-Path "$zip.sha256")) { throw "release artifacts missing" }
-
-      - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "$env:TAG"
-          "TSMIS-Branch-Identifier-$env:TAG-win64.zip"
-          "TSMIS-Branch-Identifier-$env:TAG-win64.zip.sha256"
-          --target "${{ github.sha }}"
-          --title "TSMIS Branch Identifier $env:TAG"
-          --notes-file notes.md
+        run: |
+          $releaseAssets = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Name -match "\.(zip|sha256)$" } | ForEach-Object { $_.FullName })
+          gh release create $env:GITHUB_REF_NAME @releaseAssets --title "TSMIS Branch Identifier $env:GITHUB_REF_NAME" --generate-notes

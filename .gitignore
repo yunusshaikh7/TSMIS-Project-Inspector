@@ -1,24 +1,9 @@
-# Local Claude Code state (not app code).
-.claude/
-
 __pycache__/
 *.pyc
 .venv/
-.ruff_cache/
-
-# Build artifacts (portable onefolder packaging). build\app.spec, build.ps1 and
-# prune_bundle.ps1 are tracked; the generated pieces are not.
-/dist/
-build/.venv/
-build/pyi-work/
-/TSMIS-Branch-Identifier-*.zip
-
-# Everything the app writes at runtime (dev: the repo root; packaged: next to
-# the exe). Scan results can name internal servers and user paths.
-/output/
-/logs/
-/data/
-/config.json
-/config.json.corrupt
-/update/
-/webview2/
+.pytest_cache/
+build/
+dist/
+output/
+*.spec
+settings.json

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+  <title>TSMIS Branch Identifier</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M10 7v18M10 17h7a6 6 0 0 0 6-6V7"/><circle cx="10" cy="7" r="3"/><circle cx="10" cy="25" r="3"/><circle cx="23" cy="7" r="3"/></svg></span><strong>TSMIS <span>Branch Identifier</span></strong><span id="version" class="version"></span><span id="demoBanner" class="demo-label" hidden>Sample data</span></div>
+    <button class="quiet" id="settingsBtn">Settings</button>
+  </header>
+  <main>
+    <div class="folder-row" aria-label="Scan folder">
+      <div class="folder-input"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5h6l2 2h10v12H3Z"/></svg><input id="folder" aria-label="Project folder" placeholder="Project folder" spellcheck="false" title="Scan saved .aprx projects in this folder"></div>
+      <button id="browseBtn">Browse…</button>
+      <label class="check"><input id="recursive" type="checkbox" checked> Subfolders</label>
+      <button id="scanBtn" class="primary">Scan</button><button id="stopBtn" class="danger" hidden>Stop</button>
+    </div>
+    <div id="notice" class="banner" role="status" hidden></div>
+    <div id="alert" class="banner error" role="alert" hidden></div>
+    <section class="results-card" aria-labelledby="resultsHeading">
+      <div class="results-heading">
+        <div class="results-title"><h1 id="resultsHeading">Projects</h1><span id="projectCount" class="count">0</span></div>
+        <div id="filters" class="filters" hidden><input id="search" type="search" placeholder="Search projects…" aria-label="Search results"><label class="check"><input type="checkbox" id="tsmisOnly"> TSMIS only</label></div>
+        <button id="exportBtn" disabled>Export</button>
+      </div>
+      <div id="progressArea" class="progress-area" hidden><div class="progress-label"><span id="progressText" role="status" aria-live="polite">Finding projects…</span><span id="progressCount"></span></div><progress id="progress"></progress></div>
+      <div id="tableWrap" class="table-wrap"><table class="project-table"><thead><tr><th>PROJECT</th><th>ENVIRONMENT</th><th>SAVED VERSION</th><th>SERVICE FOLDER</th><th>STATUS</th><th><span class="sr-only">View</span></th></tr></thead><tbody id="projectsBody"></tbody></table>
+        <div id="empty" class="empty-state">Choose a folder and scan.</div>
+        <div id="noMatches" class="empty-state" hidden>No matching projects.</div>
+      </div>
+      <div id="scanWarnings" class="scan-warnings" hidden></div>
+      <div class="results-footer"><span id="footerStatus">Ready</span><span id="runtimeStatus"></span></div>
+    </section>
+  </main>
+  <dialog id="details" class="details-dialog" aria-labelledby="detailsHeading">
+    <div class="details-top"><div><h2 id="detailsHeading"></h2><p id="detailPath"></p></div><button class="quiet" id="closeDetailsBtn" aria-label="Close project details">Close ×</button></div>
+    <div class="details-toolbar"><span id="detailSummary"></span><label class="check"><input id="allLayers" type="checkbox"> All layers and tables</label></div>
+    <div id="projectErrors" class="scan-warnings" hidden></div>
+    <div class="table-wrap"><table class="detail-table"><thead><tr><th>MAP / LAYER</th><th>ENVIRONMENT</th><th>SERVICE / FOLDER</th><th>SAVED VERSION</th><th>SOURCE / NOTES</th></tr></thead><tbody id="detailsBody"></tbody></table></div>
+  </dialog>
+  <dialog id="settingsDialog"><div class="dialog-title"><h2>Settings</h2><button class="quiet" data-close="settingsDialog" aria-label="Close settings">×</button></div>
+    <label class="field-label" for="pythonPath">ArcGIS Pro Python</label><div class="setting-row"><input id="pythonPath" placeholder="Select ArcGIS Pro’s python.exe" spellcheck="false"><button id="pythonBrowseBtn">Browse…</button></div>
+    <label class="field-label" for="match">TSMIS identifier</label><input id="match" value="tsmis" spellcheck="false"><p class="help">Matches service URLs, workspaces and datasets.</p>
+    <details class="settings-help"><summary>Scan help</summary><p>Save open projects in ArcGIS Pro before scanning. Files must be available locally. Projects are never changed.</p><p>Choose ArcGIS Pro’s python.exe or a cloned environment. Open Pro and sign in if the reader cannot start.</p><p>Missing versions and unrecognized environments stay unknown.</p></details>
+    <div class="settings-tools"><button id="diagnosticsBtn">Test / diagnostics</button><button id="updatesBtn" class="quiet">Check for updates</button></div>
+    <div class="dialog-actions"><button data-close="settingsDialog">Cancel</button><button id="saveSettingsBtn" class="primary">Save</button></div>
+  </dialog>
+  <dialog id="diagnosticsDialog"><div class="dialog-title"><h2>Diagnostics</h2><button class="quiet" data-close="diagnosticsDialog" aria-label="Close diagnostics">×</button></div><p>Collect connection details in one ZIP to bring back.</p><p class="help">Includes internal server names, paths and branch owners. Excludes credentials, project files and feature data.</p><div class="dialog-actions"><button id="saveDiagnosticsBtn" hidden>Save diagnostic ZIP</button><button id="runDiagnosticsBtn" class="primary">Run diagnostic scan</button></div></dialog>
+  <dialog id="updatesDialog"><div class="dialog-title"><h2>Updates</h2><button class="quiet" data-close="updatesDialog" aria-label="Close updates">×</button></div><p id="updateMessage" role="status">Checking for updates…</p><div class="dialog-actions"><button data-close="updatesDialog">Close</button><button id="downloadUpdateBtn" class="primary" hidden>Download update</button><button id="openUpdateBtn" class="primary" hidden>Open updated app</button></div></dialog>
+  <script src="demo.js"></script><script src="app.js"></script>
+</body>
+</html>
