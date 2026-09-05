@@ -8,3 +8,23 @@ output/
 *.spec
 settings.json
 Data/
+
+# Local guidance, credentials, and work exports
+/AGENTS.md
+/CLAUDE.md
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.aprx
+*.mapx
+*.lyrx
+*.sde
+*.gdb/
+*.zip
+*.csv
+*.log
+*diagnostic*.json
+_inbox/
