@@ -25,8 +25,8 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             exe = Path(folder, "Copied app", "TSMIS Branch Identifier.exe")
             with patch("sys.frozen", True, create=True), patch("sys.executable", str(exe)), patch.dict(os.environ, {"LOCALAPPDATA": "Z:/unavailable"}):
-                self.assertEqual(app_dir(), exe.parent)
-                self.assertEqual(data_dir(), exe.parent / "Data")
+                self.assertEqual(app_dir(), exe.parent.resolve())
+                self.assertEqual(data_dir(), exe.parent.resolve() / "Data")
                 self.assertTrue(data_dir().is_dir())
 
     def test_worker_avoids_bytecode_and_inherited_python_settings(self):
