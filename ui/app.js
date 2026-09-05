@@ -1,7 +1,10 @@
 /* Plain browser UI; all file and ArcGIS work stays behind the Python bridge. */
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let api, settings, state = {projects: [], running: false}, selected = null, activeProject = null, polling = false;
+const emptyState = () => ({projects: [], running: false, has_result: false, last_refreshed: null});
+let api, settings, state = emptyState(), selected = null, activeProject = null, polling = false;
+let savedPaths = [], busy = false, loadingPath = false, pathDirty = false, pathTimer;
+let selectionSequence = 0, selectionJob = Promise.resolve();
 const isDemo = location.hash === '#demo';
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text; };
 const error = text => { $('alert').textContent = text; $('alert').hidden = !text; };
@@ -10,28 +13,71 @@ const statusClass = value => value === 'Identified' ? 'good' : ['Needs review','
 function values() { return {...settings, root: $('folder').value.trim(), recursive: $('recursive').checked}; }
 function bind(id, handler) { $(id).addEventListener('click', async () => { try { await handler(); } catch(e) { error('The action could not finish: ' + (e.message || e)); } }); }
 function dialog(id) { $(id).showModal(); }
+function resetDetails() {
+  selected = null; activeProject = null;
+  $('details').close(); $('search').value = '';
+}
+function renderSavedPaths(entries = savedPaths) {
+  savedPaths = entries;
+  $('savedPaths').replaceChildren(new Option(entries.length ? 'Choose a saved folder…' : 'No saved lists yet', ''));
+  for (const entry of entries) $('savedPaths').add(new Option(entry.root, entry.root));
+  $('savedPaths').value = pathDirty || (state.has_result && (!state.complete || state.save_error)) ? '' : settings.root;
+  $('savedPaths').title = $('savedPaths').value;
+}
 function render() {
   const projects = state.projects;
   $('projectCount').textContent = projects.length;
   $('scanBtn').hidden = state.running; $('stopBtn').hidden = !state.running;
-  for (const id of ['browseBtn','folder','recursive','settingsBtn','diagnosticsBtn']) $(id).disabled = state.running;
-  $('exportBtn').disabled = state.running || !state.resultExists;
+  $('scanBtn').textContent = state.has_result ? 'Refresh' : 'Scan';
+  $('scanBtn').disabled = busy || !$('folder').value.trim();
+  for (const id of ['browseBtn','folder']) $(id).disabled = state.running || busy;
+  $('savedPaths').disabled = state.running || busy || !savedPaths.length;
+  for (const id of ['recursive','settingsBtn','diagnosticsBtn']) $(id).disabled = state.running || busy || loadingPath;
+  for (const id of ['exportBtn','clearBtn']) $(id).disabled = state.running || busy || loadingPath || pathDirty || !state.has_result;
   $('saveDiagnosticsBtn').hidden = state.running || !state.diagnostic_scan;
   $('progressArea').hidden = !state.running;
-  $('progressText').textContent = state.message;
+  $('progressText').textContent = state.message || '';
   $('progressCount').textContent = state.total ? `${projects.length} / ${state.total}` : '';
   if (state.total) { $('progress').max = state.total; $('progress').value = projects.length; } else $('progress').removeAttribute('value');
   $('empty').hidden = !!projects.length;
+  $('empty').textContent = loadingPath ? 'Loading saved list…' : state.has_result ? 'No projects in this list.' : 'Choose a folder and scan.';
   $('filters').hidden = !projects.length;
-  $('footerStatus').textContent = state.running ? 'Scanning…' : state.error ? 'Scan incomplete' : state.resultExists ? state.message : 'Ready';
+  $('footerStatus').textContent = loadingPath ? 'Loading…' : state.running ? 'Refreshing…' : state.save_error ? 'List not saved' : state.has_result && !state.complete ? (state.last_refreshed ? 'Incomplete refresh · previous saved list kept' : 'Incomplete refresh · not saved') : state.message || 'Ready';
+  const refreshed = state.last_refreshed && new Date(state.last_refreshed);
+  $('lastRefreshed').textContent = refreshed ? 'Last refreshed: ' + refreshed.toLocaleString([], {dateStyle:'short', timeStyle:'short'}) : 'Not refreshed';
+  $('lastRefreshed').dateTime = state.last_refreshed || '';
+  $('lastRefreshed').title = refreshed ? refreshed.toLocaleString() : '';
   $('scanWarnings').hidden = !state.warnings?.length;
   $('scanWarnings').textContent = state.warnings?.join('\n') || '';
   renderProjects();
 }
+function switchPath(root) {
+  clearTimeout(pathTimer);
+  const sequence = ++selectionSequence;
+  $('folder').value = root;
+  pathDirty = true; loadingPath = !!root.trim(); state = emptyState();
+  resetDetails(); error(''); notice(''); renderSavedPaths(); render();
+  // Serialize selections, skipping superseded requests, so fast path changes
+  // cannot display one folder's results beneath another folder's path.
+  selectionJob = selectionJob.catch(() => {}).then(async () => {
+    if (sequence !== selectionSequence || !root.trim()) return;
+    try {
+      const response = await api.select_path(root);
+      if (sequence !== selectionSequence) return;
+      if (!response.ok) { error(response.error); return; }
+      settings = response.settings; state = response.state; pathDirty = false;
+      $('folder').value = settings.root; $('recursive').checked = settings.recursive;
+      renderSavedPaths(response.saved_paths); error(response.warning || '');
+    } catch(e) { if (sequence === selectionSequence) error('Could not load the saved list: ' + e.message); }
+    finally { if (sequence === selectionSequence) { loadingPath = false; render(); } }
+  });
+  return selectionJob;
+}
+
 function renderProjects() {
   const query = $('search').value.toLowerCase();
-  const filtered = state.projects.map((p, index) => ({...p,index})).filter(p => (!$('tsmisOnly').checked || p.tsmis_connections) && [p.path,...p.versions,...p.environments,...p.folders,p.status].join(' ').toLowerCase().includes(query));
-  $('projectsBody').innerHTML = filtered.map(p => `<tr data-index="${p.index}" class="${selected === p.index ? 'selected' : ''}"><td><button class="project-link" data-project="${p.index}">${escapeHtml(p.name)}</button><span class="path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</span></td><td>${p.environments.length ? p.environments.map(environmentBadge).join('') : '<span class="muted">—</span>'}</td><td class="mono">${p.versions.length ? p.versions.map(escapeHtml).join('<br>') : '<span class="muted">Not reported</span>'}</td><td>${p.folders.length ? p.folders.map(escapeHtml).join('<br>') : '<span class="muted">—</span>'}</td><td><span class="status ${statusClass(p.status)}">${escapeHtml(p.status)}</span></td><td aria-hidden="true">›</td></tr>`).join('');
+  const filtered = state.projects.map((p, index) => ({...p,index})).filter(p => (!$('tsmisOnly').checked || p.tsmis_connections) && [p.path,...p.versions,...p.environments,...(p.services || []),p.status].join(' ').toLowerCase().includes(query));
+  $('projectsBody').innerHTML = filtered.map(p => `<tr data-index="${p.index}" class="${selected === p.index ? 'selected' : ''}"><td><button class="project-link" data-project="${p.index}">${escapeHtml(p.name)}</button><span class="path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</span></td><td>${p.environments.length ? p.environments.map(environmentBadge).join('') : '<span class="muted">—</span>'}</td><td class="mono">${p.versions.length ? p.versions.map(escapeHtml).join('<br>') : '<span class="muted">Not reported</span>'}</td><td>${p.services?.length ? p.services.map(escapeHtml).join('<br>') : '<span class="muted">—</span>'}</td><td><span class="status ${statusClass(p.status)}">${escapeHtml(p.status)}</span></td><td aria-hidden="true">›</td></tr>`).join('');
   $('noMatches').hidden = !state.projects.length || !!filtered.length;
 }
 async function selectProject(index) {
@@ -54,25 +100,47 @@ function renderDetails() {
   $('detailsBody').innerHTML = rows.length ? rows.map(r => `<tr><td><strong>${escapeHtml(r.layer)}</strong><small>${escapeHtml(r.map)} · ${escapeHtml(r.kind)}${r.is_tsmis ? '' : ' · Other connection'}</small></td><td><span title="${escapeHtml(r.environment_evidence || '')}">${environmentBadge(r.environment)}</span></td><td>${escapeHtml(r.service || '—')}<small>${escapeHtml(r.folder || 'No service folder')}</small></td><td><span class="mono">${escapeHtml(r.version || 'Not exposed')}</span><small>${escapeHtml(r.version_kind || r.status)}</small></td><td><div class="source">${escapeHtml(r.url || r.workspace || 'No source reported')}</div><small>${escapeHtml(r.error || r.status)}</small>${r.dataset ? `<small>Dataset ${escapeHtml(r.dataset)}</small>` : ''}</td></tr>`).join('') : '<tr><td colspan="5" class="muted">No TSMIS connections. Select “All layers and tables” to see other sources.</td></tr>';
 }
 async function startScan(diagnostics) {
-  error(''); notice('');
-  const response = await api.start_scan(values(), diagnostics);
-  if (!response.ok) { error(response.error); return; }
-  settings = values(); selected = null; activeProject = null; $('details').close();
-  state.resultExists = true;
-  await poll();
+  if (busy || state.running) return;
+  busy = true; error(''); notice(''); render();
+  try {
+    if (pathDirty || loadingPath) await switchPath($('folder').value);
+    else await selectionJob;
+    if (pathDirty) return;
+    const response = await api.start_scan(values(), diagnostics);
+    if (!response.ok) { error(response.error); return; }
+    settings = values(); resetDetails(); state.running = true;
+    await poll();
+  } finally { busy = false; render(); }
 }
 async function poll() {
   if (polling) return;
   polling = true;
+  const sequence = selectionSequence;
   try {
     const previousRunning = state.running;
-    state = {...await api.get_scan_state(), resultExists: state.resultExists};
-    if (state.error) error(state.error);
-    render();
-    if (previousRunning && !state.running && state.diagnostic_scan) notice('Diagnostics ready. Settings → Test / diagnostics → Save diagnostic ZIP.');
-  } catch(e) { error('Lost contact with the app: ' + e.message); }
+    const next = await api.get_scan_state();
+    if (sequence !== selectionSequence) return;
+    state = next; error(state.error || state.save_error || ''); render();
+    if (previousRunning && !state.running) {
+      const paths = await api.get_saved_paths();
+      if (sequence !== selectionSequence) return;
+      renderSavedPaths(paths); render();
+      if (state.diagnostic_scan) notice('Diagnostics ready. Settings → Test / diagnostics → Save diagnostic ZIP.');
+    }
+  } catch(e) { if (sequence === selectionSequence) error('Lost contact with the app: ' + e.message); }
   finally { polling = false; }
 }
+async function clearList() {
+  if (busy || state.running || pathDirty) return;
+  busy = true; render();
+  try {
+    const response = await api.clear_list(settings.root);
+    if (!response.ok) { error(response.error); return; }
+    state = response.state; resetDetails(); renderSavedPaths(response.saved_paths);
+    error(''); notice('Saved list cleared.');
+  } finally { busy = false; render(); }
+}
+
 async function saveResults(diagnostics) {
   const result = await api.save_results(diagnostics);
   if (result.ok) { notice('Saved: ' + result.path); if (diagnostics) $('diagnosticsDialog').close(); }
@@ -81,21 +149,31 @@ async function saveResults(diagnostics) {
 async function boot(bridge) {
   api = bridge;
   const initial = await api.get_initial_state();
-  settings = initial.settings;
+  settings = initial.settings; state = initial.state;
+  renderSavedPaths(initial.saved_paths); error(initial.warning || '');
   $('folder').value = settings.root; $('recursive').checked = settings.recursive;
   $('version').textContent = 'v' + initial.version;
   $('runtimeStatus').textContent = initial.arcgis_found ? 'ArcGIS Python located' : 'ArcGIS Pro required';
   $('demoBanner').hidden = !isDemo;
-  bind('browseBtn', async () => { const path = await api.choose_folder(); if (path) $('folder').value = path; });
+  bind('browseBtn', async () => { const path = await api.choose_folder(); if (path) await switchPath(path); });
+  $('savedPaths').addEventListener('change', () => { if ($('savedPaths').value) switchPath($('savedPaths').value); });
+  $('folder').addEventListener('input', () => {
+    clearTimeout(pathTimer); ++selectionSequence;
+    pathDirty = true; loadingPath = !!$('folder').value.trim(); state = emptyState();
+    resetDetails(); renderSavedPaths(); render();
+    pathTimer = setTimeout(() => switchPath($('folder').value), 300);
+  });
+  $('folder').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); switchPath($('folder').value); } });
   bind('scanBtn', () => startScan(false));
   bind('stopBtn', () => api.stop_scan());
   bind('exportBtn', () => saveResults(false));
+  bind('clearBtn', clearList);
   bind('settingsBtn', () => { $('pythonPath').value = settings.python; $('match').value = settings.match; dialog('settingsDialog'); });
   bind('pythonBrowseBtn', async () => { const path = await api.choose_python(); if (path) $('pythonPath').value = path; });
   bind('saveSettingsBtn', async () => {
     const next = {...values(), python: $('pythonPath').value.trim(), match: $('match').value.trim()};
     const result = await api.save_settings(next);
-    if (result.ok) { settings = next; $('settingsDialog').close(); notice('Settings saved.'); $('runtimeStatus').textContent = settings.python ? 'ArcGIS Python selected' : 'ArcGIS Pro required'; }
+    if (result.ok) { settings = next; $('settingsDialog').close(); notice('Settings saved. Refresh to apply them.'); $('runtimeStatus').textContent = settings.python ? 'ArcGIS Python selected' : 'ArcGIS Pro required'; }
     else { $('settingsDialog').close(); error(result.error); }
   });
   bind('diagnosticsBtn', () => { $('settingsDialog').close(); dialog('diagnosticsDialog'); });
@@ -118,8 +196,8 @@ async function boot(bridge) {
     finally { $('downloadUpdateBtn').disabled = false; }
   });
   bind('openUpdateBtn', async () => { const result = await api.open_update(); $('updateMessage').textContent = result.message || result.error; });
+  render();
   document.body.dataset.ready = 'true';
-  await poll();
   setInterval(() => { if(state.running) poll(); }, 600);
 }
 if (isDemo) { boot(window.demoApi).catch(e => error(e.message)); }

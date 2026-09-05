@@ -13,11 +13,14 @@
     <button class="quiet" id="settingsBtn">Settings</button>
   </header>
   <main>
+    <div class="path-controls">
+    <div class="saved-path-row"><label for="savedPaths">Saved lists</label><select id="savedPaths" aria-label="Paths with saved lists"><option value="">No saved lists yet</option></select></div>
     <div class="folder-row" aria-label="Scan folder">
       <div class="folder-input"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5h6l2 2h10v12H3Z"/></svg><input id="folder" aria-label="Project folder" placeholder="Project folder" spellcheck="false" title="Scan saved .aprx projects in this folder"></div>
       <button id="browseBtn">Browse…</button>
       <label class="check"><input id="recursive" type="checkbox" checked> Subfolders</label>
       <button id="scanBtn" class="primary">Scan</button><button id="stopBtn" class="danger" hidden>Stop</button>
+    </div>
     </div>
     <div id="notice" class="banner" role="status" hidden></div>
     <div id="alert" class="banner error" role="alert" hidden></div>
@@ -25,15 +28,15 @@
       <div class="results-heading">
         <div class="results-title"><h1 id="resultsHeading">Projects</h1><span id="projectCount" class="count">0</span></div>
         <div id="filters" class="filters" hidden><input id="search" type="search" placeholder="Search projects…" aria-label="Search results"><label class="check"><input type="checkbox" id="tsmisOnly"> TSMIS only</label></div>
-        <button id="exportBtn" disabled>Export</button>
+        <div class="result-actions"><button id="clearBtn" class="quiet" disabled title="Clear the saved list for this folder">Clear</button><button id="exportBtn" disabled>Export</button></div>
       </div>
       <div id="progressArea" class="progress-area" hidden><div class="progress-label"><span id="progressText" role="status" aria-live="polite">Finding projects…</span><span id="progressCount"></span></div><progress id="progress"></progress></div>
-      <div id="tableWrap" class="table-wrap"><table class="project-table"><thead><tr><th>PROJECT</th><th>ENVIRONMENT</th><th>SAVED VERSION</th><th>SERVICE FOLDER</th><th>STATUS</th><th><span class="sr-only">View</span></th></tr></thead><tbody id="projectsBody"></tbody></table>
+      <div id="tableWrap" class="table-wrap"><table class="project-table"><thead><tr><th>PROJECT</th><th>ENVIRONMENT</th><th>SAVED VERSION</th><th>SERVICE NAME</th><th>STATUS</th><th><span class="sr-only">View</span></th></tr></thead><tbody id="projectsBody"></tbody></table>
         <div id="empty" class="empty-state">Choose a folder and scan.</div>
         <div id="noMatches" class="empty-state" hidden>No matching projects.</div>
       </div>
       <div id="scanWarnings" class="scan-warnings" hidden></div>
-      <div class="results-footer"><span id="footerStatus">Ready</span><span id="runtimeStatus"></span></div>
+      <div class="results-footer"><span id="footerStatus">Ready</span><time id="lastRefreshed">Not refreshed</time></div>
     </section>
   </main>
   <dialog id="details" class="details-dialog" aria-labelledby="detailsHeading">
@@ -44,6 +47,7 @@
   </dialog>
   <dialog id="settingsDialog"><div class="dialog-title"><h2>Settings</h2><button class="quiet" data-close="settingsDialog" aria-label="Close settings">×</button></div>
     <label class="field-label" for="pythonPath">ArcGIS Pro Python</label><div class="setting-row"><input id="pythonPath" placeholder="Select ArcGIS Pro’s python.exe" spellcheck="false"><button id="pythonBrowseBtn">Browse…</button></div>
+    <p id="runtimeStatus" class="help"></p>
     <label class="field-label" for="match">TSMIS identifier</label><input id="match" value="tsmis" spellcheck="false"><p class="help">Matches service URLs, workspaces and datasets.</p>
     <details class="settings-help"><summary>Scan help</summary><p>Save open projects in ArcGIS Pro before scanning. Files must be available locally. Projects are never changed.</p><p>Choose ArcGIS Pro’s python.exe or a cloned environment. Open Pro and sign in if the reader cannot start.</p><p>Missing versions and unrecognized environments stay unknown.</p></details>
     <div class="settings-tools"><button id="diagnosticsBtn">Test / diagnostics</button><button id="updatesBtn" class="quiet">Check for updates</button></div>

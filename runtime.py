@@ -46,6 +46,11 @@ def prepare_desktop():
             Path(str(path) + ":Zone.Identifier").unlink(missing_ok=True)
         except OSError as exc:
             raise RuntimeError("Windows has blocked a downloaded app file. Right-click the original ZIP, choose Properties > Unblock, then extract it again.") from exc
+    # Ask Explorer to refresh this executable's cached icon after an update.
+    notify = ctypes.windll.shell32.SHChangeNotify
+    notify.argtypes = [ctypes.c_long, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_void_p]
+    notify.restype = None
+    notify(0x2000, 0x0005, str(Path(sys.executable).resolve()), None)  # UPDATEITEM, PATHW
 
 
 def check_webview_runtime():
@@ -146,12 +151,23 @@ def start_external(command, **kwargs):
 
 
 class ScanRunner:
-    def __init__(self):
+    def __init__(self, on_complete=None):
         self.lock = threading.RLock()
         self.cancelled = threading.Event()
         self.process = None
+        self._on_complete = on_complete
         self.state = {"running": False, "message": "Ready to scan", "total": 0, "completed": 0,
-                      "error": "", "result": None}
+                      "error": "", "result": None, "last_refreshed": None, "save_error": ""}
+
+    def restore(self, record=None):
+        with self.lock:
+            if self.state["running"]:
+                raise ValueError("Finish or stop the refresh before switching folders.")
+            result = record["result"] if record else None
+            count = len(result["projects"]) if result else 0
+            self.state.update(result=result, error="", save_error="", completed=count, total=count,
+                              message="Saved list" if result else "Ready",
+                              last_refreshed=record["refreshed_at"] if record else None)
 
     def snapshot(self):
         with self.lock:
@@ -162,6 +178,9 @@ class ScanRunner:
                                   for p in result["projects"]] if result else []
             state["warnings"] = result.get("warnings", []) if result else []
             state["diagnostic_scan"] = bool(result and result.get("diagnostic_scan"))
+            state["has_result"] = result is not None
+            state["complete"] = bool(result and result.get("complete"))
+            state["root"] = result.get("root", "") if result else ""
             return state
 
     def start(self, python, request):
@@ -175,7 +194,7 @@ class ScanRunner:
             if not request.get("match", "").strip():
                 raise ValueError("Enter the TSMIS identifier in Settings (usually tsmis).")
             self.cancelled.clear()
-            self.state.update(running=True, message="Finding projects…", total=0, completed=0, error="",
+            self.state.update(running=True, message="Finding projects…", total=0, completed=0, error="", save_error="",
                               result={**request, "python_executable": python, "projects": [], "warnings": [], "complete": False})
             threading.Thread(target=self._run, args=(python, request), daemon=True).start()
 
@@ -262,6 +281,11 @@ class ScanRunner:
                 process.wait()
             self.process = None
             with self.lock:
-                self.state["running"] = False
                 self.state["result"]["error"] = self.state["error"]
                 self.state["result"]["projects_read"] = self.state["completed"]
+                if self.state["result"]["complete"] and self._on_complete:
+                    try:
+                        self.state["last_refreshed"] = self._on_complete(self.state["result"])
+                    except Exception:
+                        self.state["save_error"] = "This list could not be saved. Your previous saved list is unchanged. Check that the app folder is writable."
+                self.state["running"] = False

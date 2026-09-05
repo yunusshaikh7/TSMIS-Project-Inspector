@@ -91,7 +91,6 @@ coll = COLLECT(exe, a.binaries, a.datas, name=APP_NAME, upx=False)
     # pywebview resolves these directories even on x64; their unused DLLs aren't needed.
     for arch in ("win-arm64", "win-x86"):
         (bundle / "_internal" / "webview" / "lib" / "runtimes" / arch / "native").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "Start Here.txt", bundle / "Start Here.txt")
     proof = work / "desktop-smoke.txt"
     proof.unlink(missing_ok=True)
     # Test a copied app with Internet-zone DLLs and no prepared user profile.

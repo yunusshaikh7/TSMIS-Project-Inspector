@@ -168,7 +168,8 @@ def summarize(project):
     else:
         status = "Identified"
     project.update(versions=versions, environments=environments, status=status,
-                   tsmis_connections=len(connections), folders=sorted({r["folder"] for r in connections if r["folder"]}))
+                   tsmis_connections=len(connections), folders=sorted({r["folder"] for r in connections if r["folder"]}),
+                   services=sorted({r["service"] for r in connections if r.get("service")}, key=str.casefold))
     return project
 
 
@@ -188,7 +189,7 @@ def csv_text(rows, fields):
 
 
 PROJECT_FIELDS = [("path", "Project path"), ("status", "Status"), ("environments", "Environments"),
-                  ("versions", "Saved versions"), ("folders", "Service folders"),
+                  ("versions", "Saved versions"), ("services", "Service names"), ("folders", "Service folders"),
                   ("tsmis_connections", "TSMIS connections"), ("errors", "Read issues")]
 LAYER_FIELDS = [("project", "Project path"), ("map", "Map"), ("layer", "Layer / table"),
                 ("kind", "Type"), ("is_tsmis", "Matches TSMIS"), ("environment", "Environment"),

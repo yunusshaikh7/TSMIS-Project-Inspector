@@ -66,7 +66,7 @@ def extract_verified(archive_path, destination):
                     or not path.parts or path.parts[0] != APP_NAME
                     or stat.S_ISLNK(info.external_attr >> 16)):
                 raise ValueError("Unsafe path in update package.")
-            if len(path.parts) > 1 and path.parts[1] not in {APP_NAME + ".exe", "_internal", "Start Here.txt"}:
+            if len(path.parts) > 1 and path.parts[1] not in {APP_NAME + ".exe", "_internal"}:
                 raise ValueError("Unexpected content in update package.")
             resolved = destination.joinpath(*path.parts).resolve()
             if not resolved.is_relative_to(destination) or name.lower() in names:
@@ -80,7 +80,7 @@ def extract_verified(archive_path, destination):
     return destination / APP_NAME / (APP_NAME + ".exe")
 
 
-def download_release(release, update_root, settings=None):
+def download_release(release, update_root, settings=None, lists_root=None):
     version_tuple(release["version"])
     destination = Path(update_root) / ("v" + release["version"])
     destination.mkdir(parents=True, exist_ok=True)
@@ -110,6 +110,9 @@ def download_release(release, update_root, settings=None):
                 data = exe.parent / "Data"
                 data.mkdir()
                 (data / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+            if lists_root is not None:
+                from history import SavedLists
+                SavedLists(lists_root).copy_to(exe.parent / "Data" / "Lists")
             return exe
         except Exception:
             shutil.rmtree(target)

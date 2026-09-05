@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
+from history import SavedLists
 import updater
 from version import APP_NAME
 
@@ -40,11 +41,14 @@ class UpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             previous = Path(folder, "old.exe")
             previous.write_text("old")
+            lists = SavedLists(Path(folder, "Lists"))
+            lists.save({"root": str(Path(folder, "Projects")), "complete": True, "projects": []})
             with patch.object(updater, "_request", side_effect=lambda url: io.BytesIO(hashlib.sha256(archive).hexdigest().encode() if url == "checksum" else archive)):
-                exe = updater.download_release(release, Path(folder, "updates"), {"match": "tsmis"})
+                exe = updater.download_release(release, Path(folder, "updates"), {"match": "tsmis"}, lists.directory)
             self.assertEqual((exe.parent / "Data" / "settings.json").read_text(), '{\n  "match": "tsmis"\n}')
             self.assertEqual(exe.read_bytes(), b"test binary")
             self.assertEqual(previous.read_text(), "old")
+            self.assertEqual(SavedLists(exe.parent / "Data" / "Lists").load(Path(folder, "Projects"))["result"]["projects"], [])
         with tempfile.TemporaryDirectory() as folder:
             with patch.object(updater, "_request", side_effect=lambda url: io.BytesIO(b"0" * 64 if url == "checksum" else archive)):
                 with self.assertRaisesRegex(ValueError, "checksum"):

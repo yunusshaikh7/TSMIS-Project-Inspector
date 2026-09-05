@@ -16,7 +16,8 @@ location, such as Documents or a USB drive; there is no installer or admin step.
   to AppData. An unavailable saved project or Python path is detected on startup.
 - Browser cache and scan scratch files live in `Data` and are cleaned up after
   use. Moving the app does not depend on the original PC's user profile.
-- Updates also stay in `Data`, and the new copy gets its own settings file.
+- Saved project lists are kept in `Data/Lists`, one JSON file per folder path.
+- Updates also stay in `Data`, and the new copy gets its settings and saved lists.
   ArcGIS installation discovery may read the registry or an existing per-user
   installation location, but the app does not create a profile there.
 - Windows supplies .NET Framework and WebView2 supplies the window. WebView2 is
@@ -34,6 +35,20 @@ IT application and DLP policies still determine whether the app is allowed.
 
 [Microsoft: WebView2 availability](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)
 and [downloaded .NET assemblies](https://learn.microsoft.com/en-us/dotnet/framework/configure-apps/file-schema/runtime/loadfromremotesources-element).
+
+## Saved lists
+
+A completed scan saves its list automatically, including layer details. The app
+reopens the selected folder's list on startup. **Saved lists**, above the path,
+switches between folders; browsing or entering a path also loads its saved list.
+Lists remain viewable when the project folder is temporarily unavailable.
+
+**Refresh** replaces that folder's list after the scan finishes. The footer shows
+when it was last refreshed, in local time. Failed or stopped refreshes leave the
+previous saved list intact; any partial results currently shown are labeled
+incomplete. Select the saved folder again to reload its previous list.
+**Clear** removes only the current folder's saved list, leaving projects and other
+saved lists alone. Copying the app folder includes all saved lists.
 
 ## First work-PC test
 
@@ -57,10 +72,11 @@ compatibility. The first diagnostic run is the integration test.
 
 ## What it reports
 
-- One project summary with saved versions, Dev / Test / Prod, service folders,
+- One project summary with saved versions, Dev / Test / Prod, full service names,
   and a status. Select a project for individual layer and standalone table
   connections, including both sides of joins. The layer path preserves map
-  group names. Service folders are separate from map groups.
+  group names. Service names such as `lrs_tsmis_prod` appear in the main list;
+  service folders such as `TSMIS` remain available in layer details and CSV exports.
 - Multiple versions/environments are flagged as **Mixed connections**, which
   can be intentional. Read errors, unexposed versions and unknown environments
   are **Needs review**. A project that cannot open does not stop later projects.
@@ -115,7 +131,7 @@ Primary references:
 **Settings → Check for updates** reads public GitHub releases from
 `yunusshaikh7/TSMIS-Branch-Identifier`. **Download update** verifies its
 SHA-256 checksum and extracts it under `Data/Updates` beside the current app.
-Your settings are copied into the new folder. **Open updated app** opens the new
+Your settings and saved lists are copied into the new folder. **Open updated app** opens the new
 executable and its folder.
 Use that copy on future launches; the old app remains for rollback. This avoids
 file replacement while running and requires no admin, PowerShell, or batch
@@ -142,17 +158,18 @@ python -m venv .venv
 and Python bridge in a hidden WebView2 run with Internet-zone DLLs, verifies
 portable settings/cache and the native window icon, then writes the versioned ZIP and
 checksum into `dist`. ArcPy is never packaged. The work PC does not need pip or
-a separate Python installation. See **Start Here.txt** inside the release.
+a separate Python installation.
 
 To view the browser-only sample interface, serve `ui` locally and open
 `index.html#demo`. This explicitly labeled preview uses sample projects and never
 runs as a fallback for a real scan.
 
-Release: update `version.py` and `Start Here.txt`, commit, tag `v0.2.1` (or the
+Release: update `version.py`, commit, tag `v0.3.0` (or the
 matching new version), and push that tag when ready to publish. The release
 workflow builds and uploads the ZIP and checksum. Normal pushes only run tests.
 
 The app is deliberately flat: `app.py` is the window/bridge, `runtime.py` the
-worker runner, `worker.py` the ArcPy reader, `core.py` interpretation/CSV exports,
+worker runner, `history.py` the portable saved lists, `worker.py` the ArcPy reader,
+`core.py` interpretation/CSV exports,
 `updater.py` release downloads, and `ui/` the interface. No server, report engine,
 database, login system, or frontend build tool is required.

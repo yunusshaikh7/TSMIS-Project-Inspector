@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
 from core import export_bundle
+from history import SavedLists
 from runtime import ScanRunner, app_dir, check_webview_runtime, data_dir, prepare_desktop, worker_environment
 
 
@@ -104,7 +105,10 @@ with open(path, "w", encoding="utf-8", buffering=1) as out:
     out.flush()
     time.sleep(20)
 ''', encoding="utf-8")
-            runner = ScanRunner()
+            store = SavedLists(Path(folder, "Lists"))
+            stamp = store.save({"root": folder, "complete": True, "projects": []})
+            runner = ScanRunner(on_complete=store.save)
+            runner.restore(store.load(folder))
             with patch("runtime.assets", return_value=Path(folder)):
                 runner.start(sys.executable, {"root": folder, "match": "tsmis"})
                 deadline = time.monotonic() + 8
@@ -115,6 +119,8 @@ with open(path, "w", encoding="utf-8", buffering=1) as out:
             self.assertEqual(runner.snapshot()["completed"], 1)
             self.assertTrue(runner.state["result"]["cancelled"])
             self.assertFalse(runner.state["result"]["complete"])
+            self.assertEqual(store.load(folder)["refreshed_at"], stamp)
+            self.assertEqual(store.load(folder)["result"]["projects"], [])
 
     def test_api_exposes_only_actions(self):
         # pywebview recursively inspects public attributes. Internal window and

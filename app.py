@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 from core import export_bundle
+from history import SavedLists, folder_key, folder_path
 from runtime import ScanRunner, assets, check_webview_runtime, data_dir, default_folder, find_arcgis_python, prepare_desktop, start_external
 from version import APP_NAME, VERSION
 
@@ -15,7 +16,9 @@ from version import APP_NAME, VERSION
 class Api:
     def __init__(self):
         self._window = None
-        self._runner = ScanRunner()
+        self._lists = SavedLists(data_dir() / "Lists")
+        self._runner = ScanRunner(on_complete=self._lists.save)
+        self._list_warning = ""
         self._settings_path = data_dir() / "settings.json"
         self._settings = {"root": default_folder(), "python": find_arcgis_python(), "recursive": True, "match": "tsmis"}
         try:
@@ -28,14 +31,62 @@ class Api:
             pass
         if not self._settings["python"] or not Path(self._settings["python"]).is_file():
             self._settings["python"] = find_arcgis_python()
-        if not Path(self._settings["root"]).is_dir():
+        record = self._load_list(self._settings["root"])
+        if not record and not self._list_warning and not Path(self._settings["root"]).is_dir():
             self._settings["root"] = default_folder()
+            record = self._load_list(self._settings["root"])
+        self._runner.restore(record)
         self._release = None
         self._downloaded = None
         self._update_lock = threading.Lock()
 
+    def _load_list(self, root):
+        self._list_warning = ""
+        try:
+            return self._lists.load(root)
+        except ValueError as exc:
+            self._list_warning = str(exc)
+            return None
+
     def get_initial_state(self):
-        return {"version": VERSION, "settings": self._settings, "arcgis_found": bool(self._settings["python"])}
+        return {"version": VERSION, "settings": self._settings, "arcgis_found": bool(self._settings["python"]),
+                "saved_paths": self._lists.paths(), "state": self._runner.snapshot(), "warning": self._list_warning}
+
+    def get_saved_paths(self):
+        return self._lists.paths()
+
+    def select_path(self, root):
+        with self._runner.lock:
+            if self._runner.state["running"]:
+                return {"ok": False, "error": "Finish or stop the refresh before switching folders."}
+            try:
+                root = folder_path(root)
+                record = self._load_list(root)
+                values = dict(self._settings, root=record["root"] if record else root)
+                if record:
+                    for key in ("recursive", "match"):
+                        values[key] = record["result"].get(key, values[key])
+                saved = self.save_settings(values)
+                if not saved["ok"]:
+                    return saved
+                self._runner.restore(record)
+                return {"ok": True, "settings": self._settings, "state": self._runner.snapshot(),
+                        "saved_paths": self._lists.paths(), "warning": self._list_warning}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+
+    def clear_list(self, root):
+        with self._runner.lock:
+            if self._runner.state["running"]:
+                return {"ok": False, "error": "Stop the refresh before clearing this list."}
+            try:
+                if folder_key(root) != folder_key(self._settings["root"]):
+                    raise ValueError("Select this folder before clearing its saved list.")
+                self._lists.clear(root)
+                self._runner.restore()
+                return {"ok": True, "state": self._runner.snapshot(), "saved_paths": self._lists.paths()}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
 
     def choose_folder(self):
         import webview
@@ -62,17 +113,19 @@ class Api:
             return {"ok": False, "error": str(exc)}
 
     def start_scan(self, values, diagnostics=False):
-        if self._runner.snapshot()["running"]:
-            return {"ok": False, "error": "A scan is already running."}
-        saved = self.save_settings(values)
-        if not saved["ok"]:
-            return saved
-        try:
-            request = {k: v for k, v in self._settings.items() if k != "python"}
-            self._runner.start(self._settings["python"], dict(request, diagnostics=bool(diagnostics)))
-            return {"ok": True}
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+        with self._runner.lock:
+            if self._runner.state["running"]:
+                return {"ok": False, "error": "A refresh is already running."}
+            saved = self.save_settings(values)
+            if not saved["ok"]:
+                return saved
+            try:
+                self._runner.restore(self._load_list(self._settings["root"]))
+                request = {k: v for k, v in self._settings.items() if k != "python"}
+                self._runner.start(self._settings["python"], dict(request, diagnostics=bool(diagnostics)))
+                return {"ok": True}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
 
     def get_scan_state(self):
         return self._runner.snapshot()
@@ -131,8 +184,8 @@ class Api:
         if not self._update_lock.acquire(blocking=False):
             return {"ok": False, "error": "An update operation is already running."}
         try:
-            self._downloaded = updater.download_release(self._release, data_dir() / "Updates", self._settings)
-            return {"ok": True, "message": "Update ready beside this app, with your settings copied. Open the updated app to continue."}
+            self._downloaded = updater.download_release(self._release, data_dir() / "Updates", self._settings, self._lists.directory)
+            return {"ok": True, "message": "Update ready beside this app, with your settings and saved lists copied. Open the updated app to continue."}
         except Exception as exc:
             return {"ok": False, "error": "Update could not be downloaded: " + str(exc)}
         finally:
@@ -185,12 +238,30 @@ def main():
                         if "--test-python" in sys.argv:
                             python = sys.argv[sys.argv.index("--test-python") + 1]
                             with tempfile.TemporaryDirectory(prefix="probe-", dir=data_dir()) as folder:
-                                api._runner.start(python, {"root": folder, "match": "tsmis", "recursive": True})
-                                deadline = time.monotonic() + 15
-                                while api._runner.snapshot()["running"] and time.monotonic() < deadline:
-                                    time.sleep(0.05)
-                                if api._runner.snapshot()["running"] or not api._runner.state["result"]["complete"]:
-                                    raise RuntimeError("Packaged worker failed: " + api._runner.snapshot()["error"])
+                                original = dict(api._settings)
+                                roots = [str(Path(folder) / name) for name in ("First", "Second")]
+                                stamps = {}
+                                for root in roots:
+                                    Path(root).mkdir()
+                                    if not api.select_path(root)["ok"]:
+                                        raise RuntimeError("Could not select a portable folder.")
+                                    response = api.start_scan(dict(api._settings, python=python))
+                                    if not response["ok"]:
+                                        raise RuntimeError(response["error"])
+                                    deadline = time.monotonic() + 15
+                                    while api._runner.snapshot()["running"] and time.monotonic() < deadline:
+                                        time.sleep(0.05)
+                                    state = api.get_scan_state()
+                                    if state["running"] or not state["complete"] or not state["last_refreshed"]:
+                                        raise RuntimeError("Packaged worker/list save failed: " + (state["error"] or state["save_error"]))
+                                    stamps[root] = state["last_refreshed"]
+                                restored = api.select_path(roots[0])["state"]
+                                if restored["last_refreshed"] != stamps[roots[0]] or not Api().get_scan_state()["has_result"]:
+                                    raise RuntimeError("Saved list did not survive reopening.")
+                                if not api.clear_list(roots[0])["ok"] or api._lists.load(roots[0]) is not None or api._lists.load(roots[1]) is None:
+                                    raise RuntimeError("Clearing a list affected the wrong folder.")
+                                api.select_path(original["root"])
+                                api.save_settings(original)
                         if not Path(str(window.native.browser.user_data_folder)).is_relative_to(session.name):
                             raise RuntimeError("Browser data escaped the portable folder.")
                         from System.Drawing import Icon
@@ -204,7 +275,7 @@ def main():
                         expected_icon.Dispose()
                         if not api.save_settings(api._settings)["ok"]:
                             raise RuntimeError("Portable settings could not be saved.")
-                        target.write_text("PASS: downloaded DLLs, WebView2, Python bridge, external worker, portable settings/cache, and window icon.", encoding="utf-8")
+                        target.write_text("PASS: downloaded DLLs, WebView2, Python bridge, external worker, per-folder saved lists/reopening/Clear, portable cache, and window icon.", encoding="utf-8")
                         break
                     time.sleep(0.2)
                 else:
