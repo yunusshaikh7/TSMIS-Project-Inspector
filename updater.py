@@ -80,7 +80,7 @@ def extract_verified(archive_path, destination):
     return destination / APP_NAME / (APP_NAME + ".exe")
 
 
-def download_release(release, update_root):
+def download_release(release, update_root, settings=None):
     version_tuple(release["version"])
     destination = Path(update_root) / ("v" + release["version"])
     destination.mkdir(parents=True, exist_ok=True)
@@ -105,7 +105,12 @@ def download_release(release, update_root):
         import tempfile
         target = Path(tempfile.mkdtemp(prefix="app-", dir=destination))
         try:
-            return extract_verified(archive_path, target)
+            exe = extract_verified(archive_path, target)
+            if settings is not None:
+                data = exe.parent / "Data"
+                data.mkdir()
+                (data / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+            return exe
         except Exception:
             shutil.rmtree(target)
             raise

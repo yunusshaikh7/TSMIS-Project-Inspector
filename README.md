@@ -4,7 +4,36 @@
 
 A small Windows app that finds the saved TSMIS versions and environments in
 ArcGIS Pro projects under a chosen folder. Python + a local HTML interface in
-WebView2, packaged as a portable folder. One runtime dependency: `pywebview`.
+WebView2, packaged as a portable folder for 64-bit Windows 10/11.
+
+## Portable folder
+
+Extract the ZIP and open **TSMIS Branch Identifier.exe**. Keep the entire folder
+when moving it to another location or sharing it with a coworker. Use a writable
+location, such as Documents or a USB drive; there is no installer or admin step.
+
+- Settings are in `Data/settings.json` beside the executable. Nothing is saved
+  to AppData. An unavailable saved project or Python path is detected on startup.
+- Browser cache and scan scratch files live in `Data` and are cleaned up after
+  use. Moving the app does not depend on the original PC's user profile.
+- Updates also stay in `Data`, and the new copy gets its own settings file.
+  ArcGIS installation discovery may read the registry or an existing per-user
+  installation location, but the app does not create a profile there.
+- Windows supplies .NET Framework and WebView2 supplies the window. WebView2 is
+  preinstalled on Windows 11 and already present on most Windows 10 PCs.
+  A missing WebView2 runtime gets a specific message. ArcGIS Pro must be installed
+  and licensed separately; no ArcPy or project data is included in the app.
+
+The release keeps only the Windows x64 UI backend, its Python runtime, the reader,
+and license notices. Unused platform loaders, old compatibility DLLs, development
+metadata and demo data are omitted. Before loading its three managed assemblies,
+the executable verifies their bundled hashes and removes inherited ZIP download
+markers from those exact files. It stops if one is missing or changed. This fixes
+the `Python.Runtime.Loader.Initialize` download error without system policy changes.
+IT application and DLP policies still determine whether the app is allowed.
+
+[Microsoft: WebView2 availability](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)
+and [downloaded .NET assemblies](https://learn.microsoft.com/en-us/dotnet/framework/configure-apps/file-schema/runtime/loadfromremotesources-element).
 
 ## First work-PC test
 
@@ -85,10 +114,12 @@ Primary references:
 
 **Settings → Check for updates** reads public GitHub releases from
 `yunusshaikh7/TSMIS-Branch-Identifier`. **Download update** verifies its
-SHA-256 checksum and extracts it under `%LOCALAPPDATA%\TSMIS Branch Identifier\updates`. **Open updated app** opens the new executable and its folder.
+SHA-256 checksum and extracts it under `Data/Updates` beside the current app.
+Your settings are copied into the new folder. **Open updated app** opens the new
+executable and its folder.
 Use that copy on future launches; the old app remains for rollback. This avoids
 file replacement while running and requires no admin, PowerShell, or batch
-script on the work PC. Settings share the same Local AppData folder. Previously
+script on the work PC. Each copy keeps its own portable settings. Previously
 downloaded app versions remain until you remove them manually.
 
 The updater only contacts GitHub when clicked. It works once this repository has
@@ -101,14 +132,15 @@ copy a new ZIP to the work PC manually.
 Python 3.11 on Windows:
 
 ```text
-python -m pip install -r requirements-build.txt
-python app.py
-python -m unittest discover -s tests -v
-python build.py
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements-build.txt
+.venv\Scripts\python app.py
+.venv\Scripts\python build.py
 ```
 
 `build.py` runs the tests, creates the portable app, checks the packaged window
-and Python bridge in a hidden WebView2 run, then writes the versioned ZIP and
+and Python bridge in a hidden WebView2 run with Internet-zone DLLs, verifies
+portable settings/cache and the native window icon, then writes the versioned ZIP and
 checksum into `dist`. ArcPy is never packaged. The work PC does not need pip or
 a separate Python installation. See **Start Here.txt** inside the release.
 
@@ -116,7 +148,7 @@ To view the browser-only sample interface, serve `ui` locally and open
 `index.html#demo`. This explicitly labeled preview uses sample projects and never
 runs as a fallback for a real scan.
 
-Release: update `version.py` and `Start Here.txt`, commit, tag `v0.2.0` (or the
+Release: update `version.py` and `Start Here.txt`, commit, tag `v0.2.1` (or the
 matching new version), and push that tag when ready to publish. The release
 workflow builds and uploads the ZIP and checksum. Normal pushes only run tests.
 

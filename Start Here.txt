@@ -1,37 +1,27 @@
-TSMIS Branch Identifier 0.2.0
+TSMIS Branch Identifier 0.2.1
 
-1. Take this whole folder to your work PC. ArcGIS Pro must be installed
-   and licensed there; you do not need to install another Python.
-2. If the ZIP was downloaded, right-click it, choose Properties, and
-   select Unblock if shown. Extract the entire ZIP before opening the app.
-3. Open TSMIS Branch Identifier.exe.
-4. Choose a project folder (the default is Documents\ArcGIS).
-5. Click Scan. Click a project to see its layers and tables.
+1. Right-click the downloaded ZIP and choose Extract All.
+2. Keep the whole extracted folder together. Open TSMIS Branch Identifier.exe.
+3. Choose your ArcGIS project folder, then click Scan.
+4. Click a project for its layers. Export saves results for Excel.
 
-For the first work-PC test:
-  Settings -> Test / diagnostics -> Run diagnostic scan
-  After it finishes: Settings -> Test / diagnostics -> Save diagnostic ZIP
-  Bring back TSMIS-diagnostics.zip to check the real connection naming.
+Portable: settings and updates stay in the Data folder beside the app.
+Copy the whole app folder to move it. Use a folder you can write to;
+no installation, administrator access, or separate Python is needed.
+Temporary browser and scan files are cleaned up after use.
 
-The app reads saved projects without changing them. Save any open project
-in ArcGIS Pro first. OneDrive files must be available on this computer.
-Unknown values are not assumed to be Prod or sde.DEFAULT.
+The work PC needs licensed ArcGIS Pro and Windows 10/11 (64-bit).
+Microsoft Edge WebView2 is normally already installed. If it is missing,
+the app will explain what IT needs to install or repair.
 
-Export saves a ZIP with projects.csv and layers.csv; open either
-CSV in Excel. Diagnostics also include connection metadata and read issues.
-Diagnostic files include local paths, internal server and branch owner names.
-Credential fields are excluded. Project files and feature data are not included.
+If ArcGIS is not detected, choose its Python in Settings. Open ArcGIS Pro
+and sign in first if scanning fails. Save open projects before scanning;
+OneDrive files must be available locally. Projects are never changed.
 
-If ArcGIS is not detected, use Settings to select ArcGIS Pro's python.exe.
-Normally: C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe
-A cloned ArcGIS environment is also supported. Open Pro and sign in if
-the reader cannot initialize its license. Microsoft Edge WebView2 is
-required for the window (normally already present on Windows 10/11).
+First work-PC test: Settings -> Test / diagnostics -> Run diagnostic scan.
+Afterward, Save diagnostic ZIP. It contains connection metadata and local
+paths, not project files, feature data, or credentials.
 
-Settings -> Check for updates checks this app's GitHub releases. Download update checks
-the published checksum and opens the new copy in a separate folder, keeping
-the previous copy. Use the newly opened folder's app next time. Settings carry
-over; scan results remain in the old window until you export them.
-
-This first build has been tested without ArcGIS on the development PC.
-The work-PC diagnostic run is still needed to validate real TSMIS projects.
+Updates: Settings -> Check for updates. Download, then Open updated app.
+The new copy includes your settings. Use that new folder's app next time.
+Older copies remain available until you remove them.

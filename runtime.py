@@ -1,7 +1,6 @@
 """Desktop paths, ArcGIS Python discovery, and an isolated read-only worker."""
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,19 +13,65 @@ def assets():
     return Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 
 
+def app_dir():
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+
+
 def data_dir():
-    base = Path(os.environ.get("LOCALAPPDATA", Path.home()))
-    path = base / "TSMIS Branch Identifier"
-    path.mkdir(parents=True, exist_ok=True)
-    # Carry preferences over from the earlier preview build.
-    previous = base / "TSMIS Branch Identifier Codex" / "settings.json"
-    settings = path / "settings.json"
-    if not settings.exists() and previous.is_file():
-        try:
-            shutil.copyfile(previous, settings)
-        except OSError:
-            pass
+    # A copied app folder carries its preferences with it. Never fall back to AppData.
+    path = app_dir() / "Data"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError("Extract the whole app folder to a location you can write to, such as Documents or a USB drive.") from exc
     return path
+
+
+def prepare_desktop():
+    if os.name != "nt":
+        return
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("TSMIS.BranchIdentifier")
+    if not getattr(sys, "frozen", False):
+        return
+    import hashlib
+    from bundle_info import ASSEMBLIES
+    # Explorer can propagate the ZIP's Internet zone to managed DLLs. Trust only
+    # the three shipped assemblies whose hashes are compiled into this executable.
+    for relative, expected in ASSEMBLIES.items():
+        path = assets() / relative
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise RuntimeError("An app file is missing or damaged: " + path.name + ". Extract the complete ZIP again. If IT removed the file, ask IT to review the app.")
+        try:
+            Path(str(path) + ":Zone.Identifier").unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError("Windows has blocked a downloaded app file. Right-click the original ZIP, choose Properties > Unblock, then extract it again.") from exc
+
+
+def check_webview_runtime():
+    if os.name != "nt":
+        return
+    import ctypes
+    if getattr(sys, "frozen", False):
+        library = assets() / "webview"
+    else:
+        import importlib.util
+        library = Path(importlib.util.find_spec("webview").origin).parent
+    loader_path = library / "lib" / "runtimes" / "win-x64" / "native" / "WebView2Loader.dll"
+    if not loader_path.is_file():
+        raise RuntimeError("An app support file is missing: WebView2Loader.dll. Extract the complete ZIP again. If IT removed the file, ask IT to review the app.")
+    loader = ctypes.WinDLL(str(loader_path))
+    probe = loader.GetAvailableCoreWebView2BrowserVersionString
+    probe.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_void_p)]
+    probe.restype = ctypes.c_long
+    version = ctypes.c_void_p()
+    try:
+        if probe(None, ctypes.byref(version)) < 0 or not version.value:
+            raise RuntimeError("Microsoft Edge WebView2 Runtime was not found. It normally comes with Windows 11 and is already on most Windows 10 PCs. Ask IT to install or repair Microsoft Edge WebView2 Runtime.")
+    finally:
+        if version.value:
+            ctypes.windll.ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+            ctypes.windll.ole32.CoTaskMemFree(version)
 
 
 def default_folder():
@@ -76,6 +121,7 @@ def worker_environment(python):
     env["CONDA_PREFIX"] = str(prefix)
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
@@ -163,13 +209,13 @@ class ScanRunner:
     def _run(self, python, request):
         process = None
         try:
-            with tempfile.TemporaryDirectory(prefix="tsmis-scan-") as temp:
+            with tempfile.TemporaryDirectory(prefix="scan-", dir=data_dir()) as temp:
                 folder = Path(temp)
                 request_path, event_path = folder / "request.json", folder / "events.jsonl"
                 request_path.write_text(json.dumps(request), encoding="utf-8")
                 event_path.touch()
                 script = assets() / "worker" / "worker.py" if getattr(sys, "frozen", False) else assets() / "worker.py"
-                process = start_external([python, "-u", str(script), "--request", str(request_path), "--events", str(event_path)],
+                process = start_external([python, "-B", "-u", str(script), "--request", str(request_path), "--events", str(event_path)],
                                            cwd=script.parent, env=worker_environment(python), stdin=subprocess.DEVNULL,
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

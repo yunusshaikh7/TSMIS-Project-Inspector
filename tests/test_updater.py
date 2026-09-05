@@ -41,7 +41,8 @@ class UpdateTests(unittest.TestCase):
             previous = Path(folder, "old.exe")
             previous.write_text("old")
             with patch.object(updater, "_request", side_effect=lambda url: io.BytesIO(hashlib.sha256(archive).hexdigest().encode() if url == "checksum" else archive)):
-                exe = updater.download_release(release, Path(folder, "updates"))
+                exe = updater.download_release(release, Path(folder, "updates"), {"match": "tsmis"})
+            self.assertEqual((exe.parent / "Data" / "settings.json").read_text(), '{\n  "match": "tsmis"\n}')
             self.assertEqual(exe.read_bytes(), b"test binary")
             self.assertEqual(previous.read_text(), "old")
         with tempfile.TemporaryDirectory() as folder:

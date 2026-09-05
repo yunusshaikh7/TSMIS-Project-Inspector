@@ -3,11 +3,12 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
 from core import export_bundle
-from runtime import ScanRunner, assets, data_dir, default_folder, find_arcgis_python, start_external
+from runtime import ScanRunner, assets, check_webview_runtime, data_dir, default_folder, find_arcgis_python, prepare_desktop, start_external
 from version import APP_NAME, VERSION
 
 
@@ -27,6 +28,8 @@ class Api:
             pass
         if not self._settings["python"] or not Path(self._settings["python"]).is_file():
             self._settings["python"] = find_arcgis_python()
+        if not Path(self._settings["root"]).is_dir():
+            self._settings["root"] = default_folder()
         self._release = None
         self._downloaded = None
         self._update_lock = threading.Lock()
@@ -128,8 +131,8 @@ class Api:
         if not self._update_lock.acquire(blocking=False):
             return {"ok": False, "error": "An update operation is already running."}
         try:
-            self._downloaded = updater.download_release(self._release, data_dir() / "updates")
-            return {"ok": True, "message": "Update ready. Open the updated app to continue. The previous copy remains available."}
+            self._downloaded = updater.download_release(self._release, data_dir() / "Updates", self._settings)
+            return {"ok": True, "message": "Update ready beside this app, with your settings copied. Open the updated app to continue."}
         except Exception as exc:
             return {"ok": False, "error": "Update could not be downloaded: " + str(exc)}
         finally:
@@ -158,7 +161,13 @@ def main():
         assert (assets() / "ui" / "index.html").is_file()
         assert interpret({"connection_info": {"url": "https://example-prod.test/server/rest/services/TSMIS/Roads/FeatureServer", "version": "sde.DEFAULT"}}, {})[0]["version"] == "sde.DEFAULT"
         return
+    session = None
     try:
+        prepare_desktop()
+        check_webview_runtime()
+        session = tempfile.TemporaryDirectory(prefix="webview-", dir=data_dir(), ignore_cleanup_errors=True)
+        from pythonnet import load
+        load("netfx")
         import webview
         api = Api()
         window = webview.create_window(APP_NAME, str(assets() / "ui" / "index.html"), js_api=api,
@@ -174,16 +183,28 @@ def main():
                 while time.monotonic() < deadline:
                     if window.evaluate_js("document.body.dataset.ready === 'true'"):
                         if "--test-python" in sys.argv:
-                            import tempfile
                             python = sys.argv[sys.argv.index("--test-python") + 1]
-                            with tempfile.TemporaryDirectory(prefix="tsmis-package-probe-") as folder:
+                            with tempfile.TemporaryDirectory(prefix="probe-", dir=data_dir()) as folder:
                                 api._runner.start(python, {"root": folder, "match": "tsmis", "recursive": True})
                                 deadline = time.monotonic() + 15
                                 while api._runner.snapshot()["running"] and time.monotonic() < deadline:
                                     time.sleep(0.05)
                                 if api._runner.snapshot()["running"] or not api._runner.state["result"]["complete"]:
                                     raise RuntimeError("Packaged worker failed: " + api._runner.snapshot()["error"])
-                        target.write_text("Packaged WebView2 interface, Python bridge, and external worker loaded successfully.", encoding="utf-8")
+                        if not Path(str(window.native.browser.user_data_folder)).is_relative_to(session.name):
+                            raise RuntimeError("Browser data escaped the portable folder.")
+                        from System.Drawing import Icon
+                        expected_icon = Icon(str(assets() / "ui" / "app.ico")).ToBitmap()
+                        actual_icon = window.native.Icon.ToBitmap()
+                        if (expected_icon.Size != actual_icon.Size or
+                                any(expected_icon.GetPixel(x, y) != actual_icon.GetPixel(x, y)
+                                    for x in range(actual_icon.Width) for y in range(actual_icon.Height))):
+                            raise RuntimeError("The native window icon does not match the app icon.")
+                        actual_icon.Dispose()
+                        expected_icon.Dispose()
+                        if not api.save_settings(api._settings)["ok"]:
+                            raise RuntimeError("Portable settings could not be saved.")
+                        target.write_text("PASS: downloaded DLLs, WebView2, Python bridge, external worker, portable settings/cache, and window icon.", encoding="utf-8")
                         break
                     time.sleep(0.2)
                 else:
@@ -192,9 +213,14 @@ def main():
                 target.write_text("FAILED: " + str(exc), encoding="utf-8")
             finally:
                 window.destroy()
-        webview.start(verify_window if smoke else None, gui="edgechromium")
+        webview.start(verify_window if smoke else None, gui="edgechromium", icon=str(assets() / "ui" / "app.ico"),
+                      private_mode=True, storage_path=session.name)
     except Exception as exc:
-        message = "The app could not start (" + type(exc).__name__ + ").\n\nIf downloaded, unblock the ZIP in Properties and extract it again. Microsoft Edge WebView2 Runtime is required.\n\n" + str(exc)
+        message = "The app could not start.\n\n" + str(exc)
+        if "Failed to resolve Python.Runtime" in str(exc):
+            message += "\n\nExtract the complete ZIP to a local folder. If this continues, ask IT to check .NET Framework and application restrictions."
+        elif isinstance(exc, PermissionError):
+            message += "\n\nMove the complete app folder to a location you can write to, such as Documents or a USB drive."
         if smoke:
             Path(sys.argv[sys.argv.index("--smoke-test") + 1]).write_text("FAILED: " + message, encoding="utf-8")
             raise SystemExit(1)
@@ -203,6 +229,9 @@ def main():
             ctypes.windll.user32.MessageBoxW(0, message, APP_NAME, 0x10)
         else:
             raise
+    finally:
+        if session:
+            session.cleanup()
 
 
 if __name__ == "__main__":
