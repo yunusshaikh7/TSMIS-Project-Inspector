@@ -66,19 +66,21 @@ and read errors. It includes internal server names, local paths and branch owner
 names. Unknown and credential property values are withheld. It does not include
 project files, complete layer definitions, feature data, passwords or URL tokens.
 
-**Real ArcGIS integration has not been tested on the development PC, which has
-no ArcGIS Pro.** Offline tests exercise extraction, grouping, failures, exports,
-worker execution, and update validation; they do not establish real-project
-compatibility. The first diagnostic run is the integration test.
+Work-PC diagnostics from ArcGIS Pro **3.3.5** successfully read **16 projects**,
+including Dev, Test, Prod, and named service versions. Local geodatabase
+connections remain visible alongside service connections.
+The development PC has no ArcGIS Pro; automated checks replay representative
+connection metadata and cover grouping, failures, exports, workers, and updates.
 
 ## What it reports
 
-- One project summary with saved versions, Dev / Test / Prod, full service names,
-  and a status. Select a project for individual layer and standalone table
+- One project summary with saved versions, Dev / Test / Prod, and full service names.
+  **Hide empty** filters out projects without matching connections.
+  Select a project for individual layer and standalone table
   connections, including both sides of joins. The layer path preserves map
   group names. Service names such as `lrs_tsmis_prod` appear in the main list;
   service folders such as `TSMIS` remain available in layer details and CSV exports.
-- Multiple versions/environments are flagged as **Mixed connections**, which
+- Project details identify multiple versions/environments as **Mixed connections**, which
   can be intentional. Read errors, unexposed versions and unknown environments
   are **Needs review**. A project that cannot open does not stop later projects.
 - **Export** writes a ZIP containing two CSVs that open in Excel.

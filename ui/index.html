@@ -26,11 +26,11 @@
     <section class="results-card" aria-labelledby="resultsHeading">
       <div class="results-heading">
         <div class="results-title"><h1 id="resultsHeading">Projects</h1><span id="projectCount" class="count">0</span></div>
-        <div id="filters" class="filters" hidden><input id="search" type="search" placeholder="Search projects…" aria-label="Search results"><label class="check"><input type="checkbox" id="tsmisOnly"> TSMIS / TSNR</label></div>
+        <div id="filters" class="filters" hidden><input id="search" type="search" placeholder="Search projects…" aria-label="Search results"><label class="check"><input type="checkbox" id="hideEmpty"> Hide empty</label></div>
         <div class="result-actions"><button id="clearBtn" class="quiet" disabled title="Clear the saved list for this folder">Clear</button><button id="exportBtn" disabled>Export</button></div>
       </div>
       <div id="progressArea" class="progress-area" hidden><div class="progress-label"><span id="progressText" role="status" aria-live="polite">Finding projects…</span><span id="progressCount"></span></div><progress id="progress"></progress></div>
-      <div id="tableWrap" class="table-wrap"><table class="project-table"><thead><tr><th>PROJECT</th><th>ENVIRONMENT</th><th>SAVED VERSION</th><th>SERVICE NAME</th><th>STATUS</th><th><span class="sr-only">View</span></th></tr></thead><tbody id="projectsBody"></tbody></table>
+      <div id="tableWrap" class="table-wrap"><table class="project-table"><thead><tr><th>PROJECT</th><th>ENVIRONMENT</th><th>SAVED VERSION</th><th>SERVICE NAME</th><th><span class="sr-only">View</span></th></tr></thead><tbody id="projectsBody"></tbody></table>
         <div id="empty" class="empty-state">Choose a folder and scan.</div>
         <div id="noMatches" class="empty-state" hidden>No matching projects.</div>
       </div>
@@ -46,9 +46,7 @@
   </dialog>
   <dialog id="settingsDialog"><div class="dialog-title"><h2>Settings</h2><button class="quiet" data-close="settingsDialog" aria-label="Close settings">×</button></div>
     <label class="field-label" for="pythonPath">ArcGIS Pro Python</label><div class="setting-row"><input id="pythonPath" placeholder="Select ArcGIS Pro’s python.exe" spellcheck="false"><button id="pythonBrowseBtn">Browse…</button></div>
-    <p id="runtimeStatus" class="help"></p>
-    <label class="field-label" for="match">TSMIS identifier</label><input id="match" value="tsmis" spellcheck="false"><p class="help">TSMIS also includes its former name, TSNR. Custom identifiers match service URLs, workspaces and datasets.</p>
-    <details class="settings-help"><summary>Scan help</summary><p>Save open projects in ArcGIS Pro before scanning. Files must be available locally. Projects are never changed.</p><p>Choose ArcGIS Pro’s python.exe or a cloned environment. Open Pro and sign in if the reader cannot start.</p><p>Missing versions and unrecognized environments stay unknown.</p></details>
+    <label class="field-label" for="match">TSMIS identifier</label><input id="match" value="tsmis" spellcheck="false">
     <div class="settings-tools"><button id="diagnosticsBtn">Test / diagnostics</button><button id="updatesBtn" class="quiet">Check for updates</button></div>
     <div class="dialog-actions"><button data-close="settingsDialog">Cancel</button><button id="saveSettingsBtn" class="primary">Save</button></div>
   </dialog>

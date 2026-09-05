@@ -9,7 +9,6 @@ const isDemo = location.hash === '#demo';
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text; };
 const error = text => { $('alert').textContent = text; $('alert').hidden = !text; };
 const environmentBadge = value => `<span class="badge ${['dev','test','prod'].includes(String(value).toLowerCase()) ? String(value).toLowerCase() : 'unknown'}">${escapeHtml(value)}</span>`;
-const statusClass = value => value === 'Identified' ? 'good' : ['Needs review','Mixed connections'].includes(value) ? 'review' : value === 'Could not open' ? 'bad' : '';
 function values() { return {...settings, root: $('folder').value.trim(), recursive: $('recursive').checked}; }
 function bind(id, handler) { $(id).addEventListener('click', async () => { try { await handler(); } catch(e) { error('The action could not finish: ' + (e.message || e)); } }); }
 function dialog(id) { $(id).showModal(); }
@@ -82,8 +81,8 @@ function switchPath(root) {
 
 function renderProjects() {
   const query = $('search').value.toLowerCase();
-  const filtered = state.projects.map((p, index) => ({...p,index})).filter(p => (!$('tsmisOnly').checked || p.tsmis_connections) && [p.path,...p.versions,...p.environments,...(p.services || []),p.status].join(' ').toLowerCase().includes(query));
-  $('projectsBody').innerHTML = filtered.map(p => `<tr data-index="${p.index}" class="${selected === p.index ? 'selected' : ''}"><td><button class="project-link" data-project="${p.index}">${escapeHtml(p.name)}</button><span class="path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</span></td><td>${p.environments.length ? p.environments.map(environmentBadge).join('') : '<span class="muted">—</span>'}</td><td class="mono">${p.versions.length ? p.versions.map(escapeHtml).join('<br>') : '<span class="muted">Not reported</span>'}</td><td>${p.services?.length ? p.services.map(escapeHtml).join('<br>') : '<span class="muted">—</span>'}</td><td><span class="status ${statusClass(p.status)}">${escapeHtml(p.status)}</span></td><td aria-hidden="true">›</td></tr>`).join('');
+  const filtered = state.projects.map((p, index) => ({...p,index})).filter(p => (!$('hideEmpty').checked || p.tsmis_connections) && [p.path,...p.versions,...p.environments,...(p.services || [])].join(' ').toLowerCase().includes(query));
+  $('projectsBody').innerHTML = filtered.map(p => `<tr data-index="${p.index}" class="${selected === p.index ? 'selected' : ''}"><td><button class="project-link" data-project="${p.index}">${escapeHtml(p.name)}</button><span class="path" title="${escapeHtml(p.path)}">${escapeHtml(p.path)}</span></td><td>${p.environments.length ? p.environments.map(environmentBadge).join('') : '<span class="muted">—</span>'}</td><td class="mono">${p.versions.length ? p.versions.map(escapeHtml).join('<br>') : '<span class="muted">Not reported</span>'}</td><td>${p.services?.length ? p.services.map(escapeHtml).join('<br>') : '<span class="muted">—</span>'}</td><td aria-hidden="true">›</td></tr>`).join('');
   $('noMatches').hidden = !state.projects.length || !!filtered.length;
 }
 async function selectProject(index) {
@@ -159,7 +158,6 @@ async function boot(bridge) {
   renderSavedPaths(initial.saved_paths); error(initial.warning || '');
   $('folder').value = settings.root; $('recursive').checked = settings.recursive;
   $('version').textContent = 'v' + initial.version;
-  $('runtimeStatus').textContent = initial.arcgis_found ? 'ArcGIS Python located' : 'ArcGIS Pro required';
   $('demoBanner').hidden = !isDemo;
   bind('browseBtn', browseFolder);
   $('folder').addEventListener('change', async () => {
@@ -177,7 +175,7 @@ async function boot(bridge) {
   bind('saveSettingsBtn', async () => {
     const next = {...values(), python: $('pythonPath').value.trim(), match: $('match').value.trim()};
     const result = await api.save_settings(next);
-    if (result.ok) { settings = next; $('settingsDialog').close(); notice('Settings saved. Refresh to apply them.'); $('runtimeStatus').textContent = settings.python ? 'ArcGIS Python selected' : 'ArcGIS Pro required'; }
+    if (result.ok) { settings = next; $('settingsDialog').close(); notice('Settings saved. Refresh to apply them.'); }
     else { $('settingsDialog').close(); error(result.error); }
   });
   bind('diagnosticsBtn', () => { $('settingsDialog').close(); dialog('diagnosticsDialog'); });
@@ -185,7 +183,7 @@ async function boot(bridge) {
   bind('saveDiagnosticsBtn', () => saveResults(true));
   bind('closeDetailsBtn', () => { $('details').close(); selected = null; activeProject = null; renderProjects(); });
   $('projectsBody').addEventListener('click', event => { const row = event.target.closest('[data-index]'); if(row) selectProject(Number(row.dataset.index)).catch(e => error(e.message)); });
-  $('search').addEventListener('input', renderProjects); $('tsmisOnly').addEventListener('change', renderProjects); $('allLayers').addEventListener('change', renderDetails);
+  $('search').addEventListener('input', renderProjects); $('hideEmpty').addEventListener('change', renderProjects); $('allLayers').addEventListener('change', renderDetails);
   document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
   bind('updatesBtn', async () => {
     $('settingsDialog').close(); dialog('updatesDialog'); $('updateMessage').textContent = 'Checking for updates…';
